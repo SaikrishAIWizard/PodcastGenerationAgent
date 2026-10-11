@@ -1,0 +1,53 @@
+Inputs can be UTF-8 plain-text or Markdown files. For two-voice dialogue, put
+each speaker turn on a line beginning with a label such as `**HOST:**` or
+`HOST:`. The first two distinct speaker labels are automatically assigned
+different voices in order of appearance. Markdown asterisks used for bold or
+italic formatting are removed before synthesis, so they are not spoken.
+ffmpeg must be installed and available on PATH.
+
+Temporary connection failures are retried up to 20 times with increasing waits,
+capped at 30 seconds between attempts. If the connection does not recover after
+that, the converter reports an error.
+
+Convert at the default speed:
+python make_mp3.py input.md output.mp3
+
+Convert a two-speaker podcast script (first speaker uses Prabhat, second uses
+Neerja by default):
+python make_mp3.py podcast.md podcast.mp3
+
+Choose different voices for the first and second speakers:
+python make_mp3.py podcast.md podcast.mp3 --speaker-1-voice en-IN-PrabhatNeural --speaker-2-voice en-IN-NeerjaNeural --rate -15%
+
+Adjust speech speed with --rate:
+python make_mp3.py input.txt slower.mp3 --rate -10%
+python make_mp3.py input.txt faster.mp3 --rate +10%
+
+Negative percentages slow speech; positive percentages speed it up. Start with
+small adjustments such as 5% or 10%. The default is +0% (normal speed).
+
+For input without two detected speakers, the default voice is
+en-IN-NeerjaNeural. Use --voice en-IN-PrabhatNeural to change that voice.
+Use --text-only to write the cleaned speech text without synthesizing audio.
+
+Generate a podcast script from a PDF or UTF-8 text file and then create its MP3:
+1. Install dependencies: python -m pip install -r requirements.txt
+2. Copy .env.example to .env and set the API key for your provider.
+3. Run, for example:
+   python main.py research.pdf --provider gemini
+
+Supported providers are groq, gemini, and openai. The matching environment
+variables are GROQ_API_KEY, GEMINI_API_KEY, and OPENAI_API_KEY. The defaults are
+llama-3.3-70b-versatile, gemini-2.5-flash, and gpt-4o-mini; select another model
+with --model MODEL_NAME. The generated files default to
+research_podcast.md and research_podcast.mp3. Use --topic and --minutes to guide
+the script, or --script-output and --audio-output to choose output paths.
+
+The pipeline defaults to Prabhat for HOST, Neerja for EXPERT, and +15% speech
+rate. Change them with --speaker-1-voice, --speaker-2-voice, and --rate. For
+example:
+python main.py research.pdf --provider groq --model llama-3.3-70b-versatile --topic "AI safety" --minutes 12 --rate +10%
+
+Existing output files are not overwritten unless --overwrite is supplied.
+Scanned PDFs without selectable text need OCR before they can be used. API keys
+in .env are kept out of version control by .gitignore.

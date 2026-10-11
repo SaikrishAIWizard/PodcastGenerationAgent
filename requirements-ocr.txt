@@ -1,0 +1,6 @@
+-r requirements.txt
+pypdfium2>=4.30
+opencv-python-headless>=4.10
+Pillow>=10.0
+torch>=2.4
+transformers>=4.45
