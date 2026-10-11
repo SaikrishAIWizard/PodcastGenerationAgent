@@ -1,53 +1,73 @@
-Inputs can be UTF-8 plain-text or Markdown files. For two-voice dialogue, put
-each speaker turn on a line beginning with a label such as `**HOST:**` or
-`HOST:`. The first two distinct speaker labels are automatically assigned
-different voices in order of appearance. Markdown asterisks used for bold or
-italic formatting are removed before synthesis, so they are not spoken.
-ffmpeg must be installed and available on PATH.
+PDF to Podcast
+==============
 
-Temporary connection failures are retried up to 20 times with increasing waits,
-capped at 30 seconds between attempts. If the connection does not recover after
-that, the converter reports an error.
+Run these commands from the project folder in Command Prompt. Install
+dependencies once:
 
-Convert at the default speed:
-python make_mp3.py input.md output.mp3
+    .venv\Scripts\activate
+    python -m pip install -r requirements.txt
 
-Convert a two-speaker podcast script (first speaker uses Prabhat, second uses
-Neerja by default):
-python make_mp3.py podcast.md podcast.mp3
+Set up .env
+-----------
 
-Choose different voices for the first and second speakers:
-python make_mp3.py podcast.md podcast.mp3 --speaker-1-voice en-IN-PrabhatNeural --speaker-2-voice en-IN-NeerjaNeural --rate -15%
+Copy .env.example to .env and add the API key for the LLM provider you want to
+use. Model defaults are in .env; use --model MODEL_NAME to override one.
 
-Adjust speech speed with --rate:
-python make_mp3.py input.txt slower.mp3 --rate -10%
-python make_mp3.py input.txt faster.mp3 --rate +10%
+Create a podcast script and audio from a digital-text PDF
+---------------------------------------------------------
 
-Negative percentages slow speech; positive percentages speed it up. Start with
-small adjustments such as 5% or 10%. The default is +0% (normal speed).
+Put the PDF in input/, then run:
 
-For input without two detected speakers, the default voice is
-en-IN-NeerjaNeural. Use --voice en-IN-PrabhatNeural to change that voice.
-Use --text-only to write the cleaned speech text without synthesizing audio.
+    python main.py GenAiDigitalQuestions.pdf --provider groq
 
-Generate a podcast script from a PDF or UTF-8 text file and then create its MP3:
-1. Install dependencies: python -m pip install -r requirements.txt
-2. Copy .env.example to .env and set the API key for your provider.
-3. Run, for example:
-   python main.py research.pdf --provider gemini
+Choose --provider groq, gemini, or openai. Generated files are saved as
+output\<PDF name>_podcast.md and output\<PDF name>_podcast.mp3. Add
+--overwrite if those files already exist.
 
-Supported providers are groq, gemini, and openai. The matching environment
-variables are GROQ_API_KEY, GEMINI_API_KEY, and OPENAI_API_KEY. The defaults are
-llama-3.3-70b-versatile, gemini-2.5-flash, and gpt-4o-mini; select another model
-with --model MODEL_NAME. The generated files default to
-research_podcast.md and research_podcast.mp3. Use --topic and --minutes to guide
-the script, or --script-output and --audio-output to choose output paths.
+Generate audio from a script you already have
+---------------------------------------------
 
-The pipeline defaults to Prabhat for HOST, Neerja for EXPERT, and +15% speech
-rate. Change them with --speaker-1-voice, --speaker-2-voice, and --rate. For
-example:
-python main.py research.pdf --provider groq --model llama-3.3-70b-versatile --topic "AI safety" --minutes 12 --rate +10%
+Use this command for the default Edge voices (Indian English):
 
-Existing output files are not overwritten unless --overwrite is supplied.
-Scanned PDFs without selectable text need OCR before they can be used. API keys
-in .env are kept out of version control by .gitignore.
+    python make_mp3.py "output\GenAiDigitalQuestions_podcast.md" "output\GenAiDigitalQuestions_podcast.mp3"
+
+To use Gemini TTS instead, set GEMINI_API_KEY in the project .env first, then
+run this command. make_mp3.py loads the key from .env automatically:
+
+    python make_mp3.py "output\GenAiDigitalQuestions_podcast.md" "output\GenAiDigitalQuestions_podcast.mp3" --tts-provider gemini
+
+Gemini uses Kore and Puck with Indian English accent guidance. It requires
+access to the configured Gemini TTS model and may incur charges. The model
+defaults to GEMINI_TTS_MODEL in .env, or gemini-3.8-flash-tts if unset.
+Override it for one run with:
+
+    python make_mp3.py "output\GenAiDigitalQuestions_podcast.md" "output\GenAiDigitalQuestions_podcast.mp3" --tts-provider gemini --tts-model gemini-3.8-flash-tts
+
+The script must contain two labeled speakers, such as HOST: and EXPERT:.
+Gemini sends their turns together to make a continuous multi-speaker
+conversation. Edge synthesizes each turn separately. If an output MP3 already
+exists, FFmpeg replaces it.
+
+Optional audio settings
+-----------------------
+
+Edge voices default to Indian English male Prabhat for speaker one and female
+Neerja for speaker two. Change them with:
+
+    python make_mp3.py "output\podcast.md" "output\podcast.mp3" --speaker-1-voice en-IN-PrabhatNeural --speaker-2-voice en-IN-NeerjaNeural
+
+Adjust Edge speech speed (Gemini uses its own pacing):
+
+    python make_mp3.py "output\podcast.md" "output\podcast.mp3" --rate +10%
+
+Run:
+
+    python make_mp3.py --help
+    python main.py --help
+
+Requirements and limitations
+----------------------------
+
+FFmpeg must be installed and available on PATH. Gemini audio generation
+requires GEMINI_API_KEY in .env. The PDF workflow extracts selectable text
+with pypdf; scanned/image-only and handwritten PDFs are not supported.

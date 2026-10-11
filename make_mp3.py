@@ -8,11 +8,17 @@ Two speakers:   --speaker-1-voice en-IN-PrabhatNeural --speaker-2-voice en-IN-Ne
 """
 import argparse
 import asyncio
+import base64
+import binascii
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import json
+import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -114,12 +120,159 @@ def dialogue_turns(raw: str):
     return turns
 
 
+def _group_turns(turns, limit: int = 12000):
+    """Group dialogue turns into Gemini requests without splitting sentences."""
+    grouped = []
+    current = []
+    current_length = 0
+    for speaker, text in turns:
+        for part in chunks(text, limit):
+            if current and current_length + len(part) > limit:
+                grouped.append(current)
+                current = []
+                current_length = 0
+            current.append((speaker, part))
+            current_length += len(part)
+    if current:
+        grouped.append(current)
+    return grouped
+
+
+def _gemini_audio_bytes(response: dict) -> bytes:
+    """Extract WAV data from Gemini Interactions API response formats."""
+    output_audio = response.get("output_audio")
+    if isinstance(output_audio, dict) and isinstance(output_audio.get("data"), str):
+        return base64.b64decode(output_audio["data"], validate=True)
+
+    for step in reversed(response.get("steps") or []):
+        for item in step.get("content") or []:
+            if item.get("type") == "audio" and isinstance(item.get("data"), str):
+                return base64.b64decode(item["data"], validate=True)
+    raise SynthesisError("Gemini TTS response did not include audio data.")
+
+
+def synthesize_gemini(
+    turns,
+    api_key: str,
+    model: str,
+    speaker_1_voice: str,
+    speaker_2_voice: str,
+    tmp: Path,
+):
+    """Synthesize speaker-tagged dialogue with Gemini's multi-speaker TTS."""
+    speakers = list(dict.fromkeys(speaker for speaker, _ in turns))
+    if len(speakers) != 2:
+        raise SynthesisError(
+            "Gemini TTS requires dialogue containing exactly two speakers."
+        )
+    voices = {
+        speakers[0]: speaker_1_voice,
+        speakers[1]: speaker_2_voice,
+    }
+    speaker_styles = {
+        speakers[0]: (
+            "Curious, warm podcast host speaking natural Indian English with "
+            "a clear, authentic Indian English accent. Engaged and relaxed; "
+            "do not exaggerate the accent."
+        ),
+        speakers[1]: (
+            "Warm, thoughtful expert speaking natural Indian English with "
+            "a clear, authentic Indian English accent. Confident and relaxed; "
+            "do not exaggerate the accent."
+        ),
+    }
+
+    files = []
+    groups = _group_turns(turns)
+    for index, group in enumerate(groups, start=1):
+        content = []
+        for speaker, text in group:
+            content.append(
+                {
+                    "type": "text",
+                    "text": text,
+                    "annotations": [
+                        {
+                            "type": "speech_metadata",
+                            "speaker": speaker,
+                            "style": speaker_styles[speaker],
+                        }
+                    ],
+                }
+            )
+        body = {
+            "model": model,
+            "input": [{"type": "user_input", "content": content}],
+            "response_format": {"type": "audio"},
+            "generation_config": {
+                "speech_config": {
+                    "mode": "conversational",
+                    "speakers": [
+                        {"speaker": speaker, "voice": voices[speaker]}
+                        for speaker in speakers
+                    ],
+                }
+            },
+        }
+        request = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/interactions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                try:
+                    response_data = json.loads(response.read().decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise SynthesisError(
+                        "Gemini TTS returned an invalid JSON response."
+                    ) from exc
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            try:
+                error_body = json.loads(detail)
+                detail = error_body.get("error", {}).get("message", detail)
+            except json.JSONDecodeError:
+                pass
+            raise SynthesisError(
+                f"Gemini TTS request failed (HTTP {exc.code}): {detail}"
+            ) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise SynthesisError(f"Could not connect to Gemini TTS: {exc}") from exc
+
+        try:
+            audio = _gemini_audio_bytes(response_data)
+        except (ValueError, binascii.Error) as exc:
+            raise SynthesisError(
+                "Gemini TTS returned malformed audio data."
+            ) from exc
+        if not audio.startswith(b"RIFF") or audio[8:12] != b"WAVE":
+            raise SynthesisError("Gemini TTS returned audio that is not a WAV file.")
+        path = tmp / f"part_{index:03d}.wav"
+        path.write_bytes(audio)
+        files.append(path)
+        print(f"  synthesized {index}/{len(groups)}", flush=True)
+    return files
+
+
 class SynthesisError(RuntimeError):
     """Raised when a text chunk cannot be synthesized after retries."""
 
 
 MAX_SYNTHESIS_ATTEMPTS = 20
 MAX_RETRY_DELAY_SECONDS = 30
+
+
+def load_gemini_api_key() -> str:
+    """Load the Gemini key from the project .env when not already in the environment."""
+    from generate_script import PROJECT_DIR, load_env_file
+
+    load_env_file(PROJECT_DIR / ".env")
+    return os.environ.get("GEMINI_API_KEY", "").strip()
 
 
 async def synth(parts, rate, tmp: Path):
@@ -170,14 +323,23 @@ def main():
         help="Edge TTS voice for non-dialogue input (default: en-IN-NeerjaNeural)",
     )
     ap.add_argument(
+        "--tts-provider",
+        choices=("edge", "gemini"),
+        default="edge",
+        help="speech synthesis backend (default: edge)",
+    )
+    ap.add_argument(
+        "--tts-model",
+        default="gemini-3.8-flash-tts",
+        help="Gemini TTS model (default: gemini-3.8-flash-tts)",
+    )
+    ap.add_argument(
         "--speaker-1-voice",
-        default="en-IN-PrabhatNeural",
-        help="voice for the first detected speaker (default: en-IN-PrabhatNeural)",
+        help="voice for the first detected speaker",
     )
     ap.add_argument(
         "--speaker-2-voice",
-        default="en-IN-NeerjaNeural",
-        help="voice for the second detected speaker (default: en-IN-NeerjaNeural)",
+        help="voice for the second detected speaker",
     )
     ap.add_argument(
         "--rate",
@@ -214,12 +376,29 @@ def main():
     except ValueError as exc:
         ap.error(str(exc))
 
+    if a.tts_provider == "gemini":
+        if not turns:
+            ap.error("Gemini TTS requires a two-speaker HOST/EXPERT script")
+        try:
+            gemini_api_key = load_gemini_api_key()
+        except ValueError as exc:
+            ap.error(str(exc))
+        if not gemini_api_key:
+            ap.error("GEMINI_API_KEY is required for --tts-provider gemini")
+        assert turns is not None
+        speaker_1_voice = a.speaker_1_voice or "Kore"
+        speaker_2_voice = a.speaker_2_voice or "Puck"
+    else:
+        speaker_1_voice = a.speaker_1_voice or "en-IN-PrabhatNeural"
+        speaker_2_voice = a.speaker_2_voice or "en-IN-NeerjaNeural"
+    gemini_turns = turns if turns is not None else []
+
     if turns:
         speaker_voices = {
             turns_speaker: voice
             for turns_speaker, voice in zip(
                 dict.fromkeys(speaker for speaker, _ in turns),
-                (a.speaker_1_voice, a.speaker_2_voice),
+                (speaker_1_voice, speaker_2_voice),
             )
         }
         parts = [
@@ -232,7 +411,7 @@ def main():
         print(
             "detected two speakers: "
             + ", ".join(speaker_voices)
-            + f" ({a.speaker_1_voice}, {a.speaker_2_voice})"
+            + f" ({speaker_1_voice}, {speaker_2_voice})"
         )
     else:
         text = clean(raw)
@@ -251,13 +430,23 @@ def main():
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         try:
-            files = asyncio.run(synth(parts, a.rate, tmp))
+            if a.tts_provider == "gemini":
+                files = synthesize_gemini(
+                    [(speaker, clean(turn_text)) for speaker, turn_text in gemini_turns],
+                    gemini_api_key,
+                    a.tts_model,
+                    speaker_1_voice,
+                    speaker_2_voice,
+                    tmp,
+                )
+            else:
+                files = asyncio.run(synth(parts, a.rate, tmp))
         except SynthesisError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
         lst = tmp / "list.txt"
-        lst.write_text("".join(f"file '{f}'\n" for f in files))
+        lst.write_text("".join(f"file '{f}'\n" for f in files), encoding="utf-8")
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
                         "-i", str(lst), "-c:a", "libmp3lame", "-b:a", "48k", "-ar", "24000",
                         "-ac", "1", "-f", "mp3", a.dst], check=True)
