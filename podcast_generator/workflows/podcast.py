@@ -4,7 +4,7 @@ from typing import NotRequired, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from podcast_tools import generate_podcast_script_tool, make_podcast_mp3_tool
+from ..tools.podcast import generate_podcast_script_tool, make_podcast_mp3_tool
 
 
 class PodcastState(TypedDict):

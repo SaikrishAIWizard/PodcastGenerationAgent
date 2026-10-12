@@ -5,14 +5,11 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-import make_mp3
-from generate_script import (
+from ..services import audio, scripts
+from ..settings import (
     PROJECT_DIR,
     PROVIDERS,
-    extract_pdf_text,
-    generate_script,
     load_env_file,
-    resolve_source,
 )
 
 
@@ -37,8 +34,8 @@ def generate_podcast_script_tool(
     if not api_key:
         raise RuntimeError(f"{api_env} is missing from .env.")
 
-    source_path = resolve_source(Path(source_pdf))
-    source_text = extract_pdf_text(source_path)
+    source_path = scripts.resolve_source(Path(source_pdf))
+    source_text = scripts.extract_pdf_text(source_path)
     print(
         f"Extracted {len(source_text):,} characters from {source_path.name}.",
         flush=True,
@@ -51,7 +48,7 @@ def generate_podcast_script_tool(
         )
         if value.strip()
     )
-    script = generate_script(
+    script = scripts.generate_script(
         dspy_provider,
         model.strip() or os.environ.get(model_env, "").strip() or default_model,
         api_key,
@@ -83,7 +80,7 @@ def make_podcast_mp3_tool(
         or os.environ.get("GEMINI_TTS_MODEL", "").strip()
         or "gemini-3.8-flash-tts"
     )
-    destination = make_mp3.convert_to_mp3(
+    destination = audio.convert_to_mp3(
         script_path,
         audio_output_path,
         tts_provider=tts_provider,

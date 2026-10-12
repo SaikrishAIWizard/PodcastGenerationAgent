@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
-"""Generate a two-speaker podcast script from a PDF/text file and create its MP3."""
+"""Compatibility entry point; use ``python -m podcast_generator``."""
 
-from generate_script import main
+from podcast_generator.cli import main
 
 
 if __name__ == "__main__":
