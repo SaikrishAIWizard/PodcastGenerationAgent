@@ -307,7 +307,130 @@ async def synth(parts, rate, tmp: Path):
     return files
 
 
-def main():
+def convert_to_mp3(
+    src: Path | str,
+    dst: Path | str = "output.mp3",
+    *,
+    voice: str = "en-IN-NeerjaNeural",
+    tts_provider: str = "edge",
+    tts_model: str = "gemini-3.8-flash-tts",
+    speaker_1_voice: str | None = None,
+    speaker_2_voice: str | None = None,
+    rate: str = "+0%",
+    text_only: bool = False,
+) -> Path:
+    """Convert a text or Markdown file into an MP3 and return its output path."""
+    if tts_provider not in {"edge", "gemini"}:
+        raise ValueError("TTS provider must be 'edge' or 'gemini'.")
+    if not re.fullmatch(r"[+-]\d+%", rate):
+        raise ValueError("Rate must be a signed percentage, for example -10% or +10%.")
+
+    src_path = Path(src)
+    dst_path = Path(dst)
+    raw = src_path.read_text(encoding="utf-8-sig")
+    turns = dialogue_turns(raw)
+
+    if tts_provider == "gemini":
+        if not turns:
+            raise ValueError("Gemini TTS requires a two-speaker HOST/EXPERT script.")
+        gemini_api_key = load_gemini_api_key()
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is required for --tts-provider gemini.")
+        resolved_speaker_1_voice = speaker_1_voice or "Kore"
+        resolved_speaker_2_voice = speaker_2_voice or "Puck"
+    else:
+        gemini_api_key = ""
+        resolved_speaker_1_voice = speaker_1_voice or "en-IN-PrabhatNeural"
+        resolved_speaker_2_voice = speaker_2_voice or "en-IN-NeerjaNeural"
+    gemini_turns = turns if turns is not None else []
+
+    if turns:
+        speaker_voices = {
+            turns_speaker: selected_voice
+            for turns_speaker, selected_voice in zip(
+                dict.fromkeys(speaker for speaker, _ in turns),
+                (resolved_speaker_1_voice, resolved_speaker_2_voice),
+            )
+        }
+        parts = [
+            (part, speaker_voices[speaker])
+            for speaker, turn_text in turns
+            for part in chunks(clean(turn_text))
+            if part
+        ]
+        text = "\n".join(clean(turn_text) for _, turn_text in turns).strip()
+        print(
+            "detected two speakers: "
+            + ", ".join(speaker_voices)
+            + f" ({resolved_speaker_1_voice}, {resolved_speaker_2_voice})"
+        )
+    else:
+        text = clean(raw)
+        parts = [(part, voice) for part in chunks(text)]
+
+    if not text:
+        raise ValueError("Input contains no text to synthesize.")
+    if text_only:
+        clean_path = dst_path.with_suffix(".clean.txt")
+        clean_path.write_text(text, encoding="utf-8")
+        print(f"cleaned: {len(text)} chars, {len(text.split())} words")
+        return clean_path
+    if not shutil.which("ffmpeg"):
+        raise FileNotFoundError("ffmpeg was not found; install it and add it to PATH.")
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        if tts_provider == "gemini":
+            files = synthesize_gemini(
+                [(speaker, clean(turn_text)) for speaker, turn_text in gemini_turns],
+                gemini_api_key,
+                tts_model,
+                resolved_speaker_1_voice,
+                resolved_speaker_2_voice,
+                tmp,
+            )
+        else:
+            files = asyncio.run(synth(parts, rate, tmp))
+
+        lst = tmp / "list.txt"
+        lst.write_text("".join(f"file '{f}'\n" for f in files), encoding="utf-8")
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(lst),
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "48k",
+                    "-ar",
+                    "24000",
+                    "-ac",
+                    "1",
+                    "-f",
+                    "mp3",
+                    str(dst_path),
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"FFmpeg failed with exit code {exc.returncode}."
+            ) from exc
+    print("saved", dst_path)
+    return dst_path
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Convert a UTF-8 text or Markdown file to an MP3 with Edge TTS.",
         epilog=(
@@ -351,7 +474,7 @@ def main():
         action="store_true",
         help="write cleaned speech text to a .clean.txt file without synthesizing",
     )
-    args = sys.argv[1:]
+    args = sys.argv[1:] if argv is None else argv
     normalized_args = []
     i = 0
     while i < len(args):
@@ -367,90 +490,22 @@ def main():
             i += 1
     a = ap.parse_args(normalized_args)
 
-    if not re.fullmatch(r"[+-]\d+%", a.rate):
-        ap.error("--rate must be a signed percentage, for example -10% or +10%")
-
-    raw = Path(a.src).read_text(encoding="utf-8-sig")
     try:
-        turns = dialogue_turns(raw)
-    except ValueError as exc:
-        ap.error(str(exc))
-
-    if a.tts_provider == "gemini":
-        if not turns:
-            ap.error("Gemini TTS requires a two-speaker HOST/EXPERT script")
-        try:
-            gemini_api_key = load_gemini_api_key()
-        except ValueError as exc:
-            ap.error(str(exc))
-        if not gemini_api_key:
-            ap.error("GEMINI_API_KEY is required for --tts-provider gemini")
-        assert turns is not None
-        speaker_1_voice = a.speaker_1_voice or "Kore"
-        speaker_2_voice = a.speaker_2_voice or "Puck"
-    else:
-        speaker_1_voice = a.speaker_1_voice or "en-IN-PrabhatNeural"
-        speaker_2_voice = a.speaker_2_voice or "en-IN-NeerjaNeural"
-    gemini_turns = turns if turns is not None else []
-
-    if turns:
-        speaker_voices = {
-            turns_speaker: voice
-            for turns_speaker, voice in zip(
-                dict.fromkeys(speaker for speaker, _ in turns),
-                (speaker_1_voice, speaker_2_voice),
-            )
-        }
-        parts = [
-            (part, speaker_voices[speaker])
-            for speaker, turn_text in turns
-            for part in chunks(clean(turn_text))
-            if part
-        ]
-        text = "\n".join(clean(turn_text) for _, turn_text in turns).strip()
-        print(
-            "detected two speakers: "
-            + ", ".join(speaker_voices)
-            + f" ({speaker_1_voice}, {speaker_2_voice})"
+        convert_to_mp3(
+            a.src,
+            a.dst,
+            voice=a.voice,
+            tts_provider=a.tts_provider,
+            tts_model=a.tts_model,
+            speaker_1_voice=a.speaker_1_voice,
+            speaker_2_voice=a.speaker_2_voice,
+            rate=a.rate,
+            text_only=a.text_only,
         )
-    else:
-        text = clean(raw)
-        parts = [(part, a.voice) for part in chunks(text)]
-
-    if not text:
-        ap.error("input contains no text to synthesize")
-    if a.text_only:
-        Path(a.dst).with_suffix(".clean.txt").write_text(text, encoding="utf-8")
-        print(f"cleaned: {len(text)} chars, {len(text.split())} words")
-        return
-    if not shutil.which("ffmpeg"):
-        print("error: ffmpeg was not found; install it and add it to PATH", file=sys.stderr)
+    except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
-
-    with tempfile.TemporaryDirectory() as t:
-        tmp = Path(t)
-        try:
-            if a.tts_provider == "gemini":
-                files = synthesize_gemini(
-                    [(speaker, clean(turn_text)) for speaker, turn_text in gemini_turns],
-                    gemini_api_key,
-                    a.tts_model,
-                    speaker_1_voice,
-                    speaker_2_voice,
-                    tmp,
-                )
-            else:
-                files = asyncio.run(synth(parts, a.rate, tmp))
-        except SynthesisError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-
-        lst = tmp / "list.txt"
-        lst.write_text("".join(f"file '{f}'\n" for f in files), encoding="utf-8")
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                        "-i", str(lst), "-c:a", "libmp3lame", "-b:a", "48k", "-ar", "24000",
-                        "-ac", "1", "-f", "mp3", a.dst], check=True)
-    print("saved", a.dst)
+    return 0
 
 
 if __name__ == "__main__":

@@ -2,9 +2,9 @@
 """Extract digital PDF text, generate a podcast script, and create its MP3."""
 
 import argparse
+import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -41,6 +41,13 @@ directions."""
 PROJECT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = PROJECT_DIR / "input"
 OUTPUT_DIR = PROJECT_DIR / "output"
+PREFERENCES_FILE = INPUT_DIR / "podcast_preferences.json"
+PREFERENCE_FIELDS = {
+    "conversation_style",
+    "speaker_1_voice",
+    "speaker_2_voice",
+    "suggestions",
+}
 
 
 def load_env_file(path: Path) -> None:
@@ -75,6 +82,35 @@ def resolve_source(source: Path) -> Path:
     raise FileNotFoundError(
         f"PDF not found: {source}. Put it in {INPUT_DIR} or pass its full path."
     )
+
+
+def load_preferences(path: Path) -> dict[str, str]:
+    """Load optional conversation and voice preferences from a JSON file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Invalid podcast preferences in {path} at line {exc.lineno}, "
+            f"column {exc.colno}: {exc.msg}"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Podcast preferences in {path} must be a JSON object.")
+
+    unknown_fields = data.keys() - PREFERENCE_FIELDS
+    if unknown_fields:
+        names = ", ".join(sorted(unknown_fields))
+        raise ValueError(f"Unknown podcast preference field(s) in {path}: {names}.")
+
+    preferences = {}
+    for field in PREFERENCE_FIELDS:
+        value = data.get(field, "")
+        if not isinstance(value, str):
+            raise ValueError(
+                f"Podcast preference '{field}' in {path} must be a string."
+            )
+        preferences[field] = value.strip()
+    return preferences
 
 
 def extract_pdf_text(path: Path) -> str:
@@ -115,6 +151,7 @@ def generate_script(
     api_key: str,
     source_text: str,
     topic: str | None,
+    preferences: str = "",
 ) -> str:
     """Generate and validate a two-speaker script using DSPy."""
     try:
@@ -139,9 +176,15 @@ def generate_script(
         temperature=0,
         max_tokens=16000,
     )
+    guidelines = SYSTEM_PROMPT
+    if preferences.strip():
+        guidelines += (
+            "\n\nUser customization (follow when compatible with the source):\n"
+            f"{preferences.strip()}"
+        )
     with dspy.context(lm=lm):
         response = dspy.Predict(PodcastScript)(
-            guidelines=SYSTEM_PROMPT,
+            guidelines=guidelines,
             source_text=source_text,
             topic=topic.strip() if topic and topic.strip() else "Follow the PDF.",
         )
@@ -170,6 +213,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--provider", required=True, choices=sorted(PROVIDERS))
     parser.add_argument("--model", help="override the model set in .env")
     parser.add_argument("--topic", help="optional focus for the conversation")
+    parser.add_argument(
+        "--preferences-file",
+        type=Path,
+        default=PREFERENCES_FILE,
+        help="JSON file with conversation and voice preferences",
+    )
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--rate", default="+15%", help="speech rate, e.g. +10%%")
@@ -189,11 +238,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         load_env_file(PROJECT_DIR / ".env")
-        api_env, model_env, default_model, dspy_provider = PROVIDERS[args.provider]
+        api_env, model_env, default_model, _ = PROVIDERS[args.provider]
         api_key = os.environ.get(api_env, "").strip()
         if not api_key:
             raise ValueError(f"{api_env} is missing from .env.")
         model = args.model or os.environ.get(model_env, "").strip() or default_model
+        preferences = load_preferences(args.preferences_file.expanduser())
 
         source_path = resolve_source(args.source)
         output_dir = args.output_dir.expanduser().resolve()
@@ -205,49 +255,34 @@ def main(argv: list[str] | None = None) -> int:
                 "directory or pass --overwrite."
             )
 
-        source_text = extract_pdf_text(source_path)
-        print(
-            f"Extracted {len(source_text):,} characters from {source_path.name}.",
-            flush=True,
-        )
-        script = generate_script(
-            dspy_provider, model, api_key, source_text, args.topic
-        )
-        output_dir.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(script, encoding="utf-8")
-        print(f"Saved script: {script_path}", flush=True)
+        script_preferences = {
+            "conversation_style": preferences["conversation_style"],
+            "suggestions": preferences["suggestions"],
+        }
+        from podcast_graph import podcast_graph
 
-        converter = PROJECT_DIR / "make_mp3.py"
-        command = [
-            sys.executable,
-            str(converter),
-            str(script_path),
-            str(audio_path),
-            "--tts-provider",
-            args.tts_provider,
-            "--speaker-1-voice",
-            args.speaker_1_voice
-            or (
-                "Kore" if args.tts_provider == "gemini"
-                else "en-IN-PrabhatNeural"
-            ),
-            "--speaker-2-voice",
-            args.speaker_2_voice
-            or (
-                "Puck" if args.tts_provider == "gemini"
-                else "en-IN-NeerjaNeural"
-            ),
-            "--rate",
-            args.rate,
-        ]
-        tts_model = args.tts_model or os.environ.get("GEMINI_TTS_MODEL", "").strip()
-        if tts_model:
-            command.extend(["--tts-model", tts_model])
-        result = subprocess.run(command, check=False)
-        if result.returncode:
-            raise RuntimeError(
-                f"Audio conversion failed with exit code {result.returncode}."
-            )
+        result = podcast_graph.invoke(
+            {
+                "source_pdf": str(source_path),
+                "provider": args.provider,
+                "model": model,
+                "topic": args.topic or "",
+                "conversation_style": script_preferences["conversation_style"],
+                "suggestions": script_preferences["suggestions"],
+                "tts_provider": args.tts_provider,
+                "tts_model": args.tts_model or "",
+                "speaker_1_voice": args.speaker_1_voice
+                or preferences["speaker_1_voice"],
+                "speaker_2_voice": args.speaker_2_voice
+                or preferences["speaker_2_voice"],
+                "rate": args.rate,
+                "script_output_path": str(script_path),
+                "audio_output_path": str(audio_path),
+            }
+        )
+        script_path = Path(result["script_path"])
+        audio_path = Path(result["audio_path"])
+        print(f"Saved script: {script_path}", flush=True)
         print(f"Saved audio: {audio_path}")
     except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
