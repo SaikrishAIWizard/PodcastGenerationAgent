@@ -16,6 +16,7 @@ import sys
 import tempfile
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -159,6 +160,7 @@ def synthesize_gemini(
     speaker_1_voice: str,
     speaker_2_voice: str,
     tmp: Path,
+    timeout_seconds: float | None = None,
 ):
     """Synthesize speaker-tagged dialogue with Gemini's multi-speaker TTS."""
     speakers = list(dict.fromkeys(speaker for speaker, _ in turns))
@@ -185,6 +187,11 @@ def synthesize_gemini(
 
     files = []
     groups = _group_turns(turns)
+    deadline = (
+        time.monotonic() + timeout_seconds
+        if timeout_seconds is not None
+        else None
+    )
     for index, group in enumerate(groups, start=1):
         content = []
         for speaker, text in group:
@@ -225,7 +232,13 @@ def synthesize_gemini(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=180) as response:
+            request_timeout = 180
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Gemini TTS generation timed out.")
+                request_timeout = min(request_timeout, remaining)
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 try:
                     response_data = json.loads(response.read().decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -315,14 +328,18 @@ def convert_to_mp3(
     tts_model: str = "gemini-3.8-flash-tts",
     speaker_1_voice: str | None = None,
     speaker_2_voice: str | None = None,
+    gemini_api_key: str | None = None,
     rate: str = "+0%",
     text_only: bool = False,
+    timeout_seconds: float | None = None,
 ) -> Path:
     """Convert a text or Markdown file into an MP3 and return its output path."""
     if tts_provider not in {"edge", "gemini"}:
         raise ValueError("TTS provider must be 'edge' or 'gemini'.")
     if not re.fullmatch(r"[+-]\d+%", rate):
         raise ValueError("Rate must be a signed percentage, for example -10% or +10%.")
+    if timeout_seconds is not None and timeout_seconds <= 0:
+        raise ValueError("The synthesis timeout must be greater than zero.")
 
     src_path = Path(src)
     dst_path = Path(dst)
@@ -332,13 +349,13 @@ def convert_to_mp3(
     if tts_provider == "gemini":
         if not turns:
             raise ValueError("Gemini TTS requires a two-speaker HOST/EXPERT script.")
-        gemini_api_key = load_gemini_api_key()
-        if not gemini_api_key:
+        selected_gemini_api_key = gemini_api_key or load_gemini_api_key()
+        if not selected_gemini_api_key:
             raise ValueError("GEMINI_API_KEY is required for --tts-provider gemini.")
         resolved_speaker_1_voice = speaker_1_voice or "Kore"
         resolved_speaker_2_voice = speaker_2_voice or "Puck"
     else:
-        gemini_api_key = ""
+        selected_gemini_api_key = ""
         resolved_speaker_1_voice = speaker_1_voice or "en-IN-PrabhatNeural"
         resolved_speaker_2_voice = speaker_2_voice or "en-IN-NeerjaNeural"
     gemini_turns = turns if turns is not None else []
@@ -380,21 +397,43 @@ def convert_to_mp3(
     dst_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
+        deadline = (
+            time.monotonic() + timeout_seconds
+            if timeout_seconds is not None
+            else None
+        )
         if tts_provider == "gemini":
             files = synthesize_gemini(
                 [(speaker, clean(turn_text)) for speaker, turn_text in gemini_turns],
-                gemini_api_key,
+                selected_gemini_api_key,
                 tts_model,
                 resolved_speaker_1_voice,
                 resolved_speaker_2_voice,
                 tmp,
+                timeout_seconds=(
+                    max(0.01, deadline - time.monotonic())
+                    if deadline is not None
+                    else None
+                ),
             )
         else:
-            files = asyncio.run(synth(parts, rate, tmp))
+            synthesis = synth(parts, rate, tmp)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    synthesis.close()
+                    raise TimeoutError("Edge TTS generation timed out.")
+                synthesis = asyncio.wait_for(synthesis, timeout=remaining)
+            files = asyncio.run(synthesis)
 
         lst = tmp / "list.txt"
         lst.write_text("".join(f"file '{f}'\n" for f in files), encoding="utf-8")
         try:
+            ffmpeg_timeout = None
+            if deadline is not None:
+                ffmpeg_timeout = deadline - time.monotonic()
+                if ffmpeg_timeout <= 0:
+                    raise TimeoutError("Audio generation timed out.")
             subprocess.run(
                 [
                     "ffmpeg",
@@ -420,6 +459,7 @@ def convert_to_mp3(
                     str(dst_path),
                 ],
                 check=True,
+                timeout=ffmpeg_timeout,
             )
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(

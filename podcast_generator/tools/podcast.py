@@ -18,6 +18,7 @@ def generate_podcast_script_tool(
     source_pdf: str,
     script_output_path: str,
     provider: str,
+    api_key: str = "",
     model: str = "",
     topic: str = "",
     conversation_style: str = "",
@@ -30,7 +31,7 @@ def generate_podcast_script_tool(
     except KeyError as exc:
         raise ValueError(f"Unsupported language-model provider: {provider}.") from exc
 
-    api_key = os.environ.get(api_env, "").strip()
+    api_key = api_key.strip() or os.environ.get(api_env, "").strip()
     if not api_key:
         raise RuntimeError(f"{api_env} is missing from .env.")
 
@@ -68,6 +69,7 @@ def make_podcast_mp3_tool(
     script_path: str,
     audio_output_path: str,
     tts_provider: str = "edge",
+    gemini_api_key: str = "",
     tts_model: str = "",
     speaker_1_voice: str = "",
     speaker_2_voice: str = "",
@@ -85,6 +87,7 @@ def make_podcast_mp3_tool(
         audio_output_path,
         tts_provider=tts_provider,
         tts_model=selected_model,
+        gemini_api_key=gemini_api_key.strip() or None,
         speaker_1_voice=speaker_1_voice.strip() or None,
         speaker_2_voice=speaker_2_voice.strip() or None,
         rate=rate,

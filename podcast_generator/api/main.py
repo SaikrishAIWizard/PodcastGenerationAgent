@@ -12,7 +12,17 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ..settings import OUTPUT_DIR, PREFERENCES_FILE, load_preferences
+from ..settings import (
+    OUTPUT_DIR,
+    PREFERENCES_FILE,
+    PROJECT_DIR,
+    PROVIDERS,
+    load_env_file,
+    load_preferences,
+    provider_models,
+)
+from ..telegram.client import ProviderValidationError, validate_provider_key
+from ..telegram.router import router as telegram_router
 from ..workflows.podcast import podcast_graph
 
 
@@ -21,6 +31,7 @@ app = FastAPI(
     description="Generate customized podcast scripts and audio from PDF uploads.",
     version="1.0.0",
 )
+app.include_router(telegram_router)
 jobs: dict[str, tuple[Path, Path]] = {}
 
 
@@ -30,10 +41,22 @@ class PodcastResponse(BaseModel):
     audio_url: str
 
 
+def _redact_credentials(message: str, *credentials: str) -> str:
+    """Prevent provider credentials from appearing in API error responses."""
+    for credential in credentials:
+        if credential:
+            message = message.replace(credential, "[redacted]")
+    return message
+
+
 @app.post("/podcasts", response_model=PodcastResponse, status_code=201)
 async def create_podcast(
     file: UploadFile = File(...),
     provider: Literal["groq", "gemini", "openai"] = Form(...),
+    api_key: str = Form(
+        ..., min_length=1, json_schema_extra={"format": "password"}
+    ),
+    gemini_api_key: str = Form("", json_schema_extra={"format": "password"}),
     model: str = Form(""),
     topic: str = Form(""),
     conversation_style: str = Form(""),
@@ -45,8 +68,35 @@ async def create_podcast(
     rate: str = Form("+15%"),
 ) -> PodcastResponse:
     """Accept a PDF upload and run the complete LangGraph podcast workflow."""
+    load_env_file(PROJECT_DIR / ".env")
     if not file.filename or Path(file.filename.replace("\\", "/")).suffix.casefold() != ".pdf":
+        await file.close()
         raise HTTPException(status_code=400, detail="Upload a PDF file.")
+
+    api_key = api_key.strip()
+    gemini_api_key = gemini_api_key.strip()
+    model = model.strip()
+    if not api_key:
+        raise HTTPException(status_code=422, detail="Enter your provider API key.")
+    if model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model):
+        raise HTTPException(status_code=422, detail="Enter a valid model identifier.")
+    default_model, _ = provider_models(provider)
+    selected_model = model or default_model
+    if tts_provider == "gemini":
+        if provider == "gemini":
+            gemini_api_key = gemini_api_key or api_key
+        if not gemini_api_key:
+            raise HTTPException(
+                status_code=422,
+                detail="Gemini TTS requires your Gemini API key.",
+            )
+
+    try:
+        await validate_provider_key(provider, api_key)
+        if tts_provider == "gemini" and provider != "gemini":
+            await validate_provider_key("gemini", gemini_api_key)
+    except ProviderValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     preferences = load_preferences(PREFERENCES_FILE)
     job_id = uuid.uuid4().hex
@@ -68,7 +118,9 @@ async def create_podcast(
                 {
                     "source_pdf": str(source_path),
                     "provider": provider,
-                    "model": model,
+                    "api_key": api_key,
+                    "gemini_api_key": gemini_api_key,
+                    "model": selected_model,
                     "topic": topic,
                     "conversation_style": (
                         conversation_style or preferences["conversation_style"]
@@ -88,11 +140,20 @@ async def create_podcast(
                 },
             )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=_redact_credentials(str(exc), api_key, gemini_api_key),
+        ) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=_redact_credentials(str(exc), api_key, gemini_api_key),
+        ) from exc
     except OSError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=503,
+            detail=_redact_credentials(str(exc), api_key, gemini_api_key),
+        ) from exc
     finally:
         await file.close()
 
@@ -102,6 +163,19 @@ async def create_podcast(
         script_url=f"/podcasts/{job_id}/script",
         audio_url=f"/podcasts/{job_id}/audio",
     )
+
+
+@app.get("/providers")
+async def list_providers() -> dict[str, dict[str, object]]:
+    """List providers and configured model choices for API clients."""
+    load_env_file(PROJECT_DIR / ".env")
+    return {
+        provider: {
+            "default_model": provider_models(provider)[0],
+            "models": provider_models(provider)[1],
+        }
+        for provider in PROVIDERS
+    }
 
 
 @app.get("/podcasts/{job_id}/script")

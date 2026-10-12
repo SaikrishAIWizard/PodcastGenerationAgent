@@ -10,6 +10,8 @@ PROJECT_DIR = Path(__file__).resolve().parent.parent
 INPUT_DIR = PROJECT_DIR / "input"
 OUTPUT_DIR = PROJECT_DIR / "output"
 PREFERENCES_FILE = INPUT_DIR / "podcast_preferences.json"
+TELEGRAM_WEBHOOK_SECRET_ENV = "TELEGRAM_WEBHOOK_SECRET"
+TELEGRAM_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 
 PROVIDERS = {
     "groq": ("GROQ_API_KEY", "GROQ_MODEL", "llama-3.3-70b-versatile", "groq"),
@@ -23,6 +25,45 @@ PREFERENCE_FIELDS = {
     "speaker_2_voice",
     "suggestions",
 }
+
+
+def provider_models(provider: str) -> tuple[str, list[str]]:
+    """Return a configured default model and selectable models for a provider."""
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unsupported language-model provider: {provider}.")
+
+    _, model_env, fallback_model, _ = PROVIDERS[provider]
+
+    def split_models(value: str) -> list[str]:
+        return [
+            model.strip()
+            for model in re.split(r"[,\r\n]+", value)
+            if model.strip()
+        ]
+
+    configured_default = split_models(os.environ.get(model_env, ""))
+    configured_list = split_models(
+        os.environ.get(f"{provider.upper()}_MODELS", "")
+    )
+    default_model = configured_default[0] if configured_default else fallback_model
+    models = list(
+        dict.fromkeys([*configured_default, *configured_list, fallback_model])
+    )
+    return default_model, models
+
+
+def positive_int_setting(name: str, default: int) -> int:
+    """Read a positive integer setting at runtime, after environment loading."""
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
 
 
 def load_env_file(path: Path) -> None:

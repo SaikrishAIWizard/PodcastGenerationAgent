@@ -13,6 +13,8 @@ class PodcastState(TypedDict):
     script_output_path: str
     audio_output_path: str
     model: NotRequired[str]
+    api_key: NotRequired[str]
+    gemini_api_key: NotRequired[str]
     topic: NotRequired[str]
     conversation_style: NotRequired[str]
     suggestions: NotRequired[str]
@@ -32,6 +34,7 @@ def generate_script_node(state: PodcastState) -> dict[str, str]:
             "source_pdf": state["source_pdf"],
             "script_output_path": state["script_output_path"],
             "provider": state["provider"],
+            "api_key": state.get("api_key", ""),
             "model": state.get("model", ""),
             "topic": state.get("topic", ""),
             "conversation_style": state.get("conversation_style", ""),
@@ -51,6 +54,7 @@ def make_mp3_node(state: PodcastState) -> dict[str, str]:
             "script_path": script_path,
             "audio_output_path": state["audio_output_path"],
             "tts_provider": state.get("tts_provider", "edge"),
+            "gemini_api_key": state.get("gemini_api_key", ""),
             "tts_model": state.get("tts_model", ""),
             "speaker_1_voice": state.get("speaker_1_voice", ""),
             "speaker_2_voice": state.get("speaker_2_voice", ""),
