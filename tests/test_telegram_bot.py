@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, call, patch
 
 from fastapi.testclient import TestClient
@@ -53,7 +54,7 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
         self.client = FakeTelegramClient()
         self.bot = TelegramPodcastBot(self.client)
 
-    async def test_start_offers_all_script_providers(self):
+    async def test_start_uses_quick_defaults_and_offers_input_modes(self):
         await self.bot.process_update(
             {
                 "update_id": 1,
@@ -61,17 +62,48 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        self.assertEqual(self.bot.sessions[10].stage, "choose_provider")
+        session = self.bot.sessions[10]
+        self.assertEqual(session.stage, "choose_mode")
+        self.assertEqual(session.provider, "groq")
+        self.assertEqual(session.model, provider_models("groq")[0])
+        self.assertEqual(session.tts_provider, "gemini")
         keyboard = self.client.calls[-1][1]["reply_markup"]["inline_keyboard"]
         choices = {
             button["callback_data"]
             for row in keyboard
             for button in row
+            if "callback_data" in button
         }
         self.assertEqual(
             choices,
-            {"provider:gemini", "provider:groq", "provider:openai"},
+            {"mode:pdf", "mode:script"},
         )
+
+    async def test_pdf_menu_command_starts_at_pdf_upload(self):
+        await self.bot.process_update(
+            {
+                "update_id": 20,
+                "message": private_message(10, 10, 20, text="/pdf2podcast"),
+            }
+        )
+
+        session = self.bot.sessions[10]
+        self.assertEqual(session.stage, "upload_pdf")
+        self.assertEqual(session.mode, "pdf")
+        self.assertIn("Upload your PDF", self.client.calls[-1][1]["text"])
+
+    async def test_script_menu_command_starts_at_script_upload(self):
+        await self.bot.process_update(
+            {
+                "update_id": 21,
+                "message": private_message(10, 10, 21, text="/script2podcast"),
+            }
+        )
+
+        session = self.bot.sessions[10]
+        self.assertEqual(session.stage, "upload_txt")
+        self.assertEqual(session.mode, "script")
+        self.assertIn("Upload your TXT", self.client.calls[-1][1]["text"])
 
     async def test_provider_key_is_deleted_and_only_kept_in_its_user_session(self):
         callback = {
@@ -211,10 +243,10 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
             "message": private_message(10, 10, 1, text="/start"),
         }
         await self.bot.process_update(update)
+        calls_after_first_delivery = list(self.client.calls)
         await self.bot.process_update(update)
 
-        sent_messages = [call for call in self.client.calls if call[0] == "sendMessage"]
-        self.assertEqual(len(sent_messages), 1)
+        self.assertEqual(self.client.calls, calls_after_first_delivery)
 
     async def test_sessions_are_isolated_between_users(self):
         await self.bot.process_update(
@@ -283,6 +315,37 @@ class TelegramValidationTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 403)
+
+
+class TelegramMenuRegistrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_webhook_registration_installs_menu_commands(self):
+        from podcast_generator.telegram import set_webhook
+
+        client = SimpleNamespace(call=AsyncMock(return_value={}))
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "TELEGRAM_BOT_TOKEN": "test-token",
+                    "TELEGRAM_WEBHOOK_SECRET": "test-secret",
+                    "TELEGRAM_WEBHOOK_URL": "https://example.com/telegram/webhook",
+                },
+                clear=True,
+            ),
+            patch.object(set_webhook, "load_env_file"),
+            patch.object(set_webhook, "TelegramClient", return_value=client),
+        ):
+            await set_webhook.register_webhook()
+
+        self.assertEqual(
+            [entry.args[0] for entry in client.call.await_args_list],
+            ["setWebhook", "setMyCommands"],
+        )
+        commands = client.call.await_args_list[1].kwargs["commands"]
+        self.assertEqual(
+            [entry["command"] for entry in commands[:3]],
+            ["devicesettings", "pdf2podcast", "script2podcast"],
+        )
 
 
 class ProviderApiTests(unittest.TestCase):

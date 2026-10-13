@@ -2,12 +2,14 @@
 
 import asyncio
 import logging
+import os
 import shutil
 import tempfile
 import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from ..settings import (
     PREFERENCES_FILE,
@@ -196,6 +198,16 @@ class TelegramPodcastBot:
         if command == "/start":
             await self._start(user_id, chat_id)
             return
+        if command in {"/settings", "/configure", "/devicesettings"}:
+            await self._show_device_settings(chat_id)
+            return
+        if command in {"/pdf2podcast", "/script2podcast"}:
+            await self._start(
+                user_id,
+                chat_id,
+                mode="pdf" if command == "/pdf2podcast" else "script",
+            )
+            return
         if command == "/cancel":
             await self._cancel(user_id, chat_id)
             return
@@ -283,7 +295,9 @@ class TelegramPodcastBot:
             text="Please choose one of the buttons to continue.",
         )
 
-    async def _start(self, user_id: int, chat_id: int) -> None:
+    async def _start(
+        self, user_id: int, chat_id: int, mode: str | None = None
+    ) -> None:
         old_task = self.active_tasks.get(user_id)
         if old_task and not old_task.done():
             old_task.cancel()
@@ -297,23 +311,122 @@ class TelegramPodcastBot:
             if old_task is None or old_task.done():
                 await self._cleanup_session_files(old_session)
 
-        session = TelegramSession(user_id=user_id, chat_id=chat_id)
+        session = TelegramSession(
+            user_id=user_id,
+            chat_id=chat_id,
+            stage="choose_mode",
+            provider="groq",
+            model=provider_models("groq")[0],
+            tts_provider="gemini",
+        )
         self.sessions[user_id] = session
         self._session_updated[user_id] = time.monotonic()
         await self.client.call(
             "sendMessage",
             chat_id=chat_id,
             text=(
-                "Welcome to Podcast Generator! First, choose the AI provider "
-                "that will write your podcast script. I’ll ask for its API key "
-                "next. A Gemini key is also needed if you later choose Gemini "
-                "voice generation; Edge TTS is available without one."
-            ),
-            reply_markup=self._keyboard(
-                [("Gemini", "provider:gemini"), ("Groq", "provider:groq")],
-                [("OpenAI", "provider:openai")],
+                "Welcome to Podcast Generator! Quick start uses Groq for the "
+                "script and Gemini for voices. Choose a file type; you can "
+                "change provider, model, voice, and saved device settings with "
+                "/settings."
             ),
         )
+        if mode is None:
+            await self._show_modes(session)
+        else:
+            session.mode = mode
+            session.stage = "upload_pdf" if mode == "pdf" else "upload_txt"
+            extension = "PDF" if mode == "pdf" else "TXT"
+            await self.client.call(
+                "sendMessage",
+                chat_id=chat_id,
+                text=f"Upload your {extension} file as a document attachment.",
+            )
+
+    async def _show_generation_options(self, session: TelegramSession) -> None:
+        session.stage = "configure"
+        webapp_url = self._webapp_url()
+        rows: list[list[dict[str, Any]]] = []
+        if webapp_url:
+            rows.append(
+                [
+                    self._web_app_button(
+                        "Use saved settings & generate", webapp_url
+                    )
+                ]
+            )
+        rows.append(
+            [
+                {
+                    "text": "Configure in chat (fallback)",
+                    "callback_data": "setup:chat",
+                }
+            ]
+        )
+        if webapp_url:
+            text = (
+                "Ready to generate. Use your device-saved provider, model, "
+                "Gemini TTS choice, and API keys. Edit those settings with "
+                "/settings. Keys are sent only for this job and kept in memory."
+            )
+        else:
+            text = "Ready to generate. Configure the provider, model, and keys in chat."
+        await self.client.call(
+            "sendMessage",
+            chat_id=session.chat_id,
+            text=text,
+            reply_markup={"inline_keyboard": rows},
+        )
+
+    async def _show_device_settings(self, chat_id: int) -> None:
+        url = self._webapp_url()
+        if not url:
+            await self.client.call(
+                "sendMessage",
+                chat_id=chat_id,
+                text=(
+                    "Device-local settings need a public HTTPS "
+                    "TELEGRAM_WEBHOOK_URL ending in /telegram/webhook. "
+                    "For now, send /start and use chat setup."
+                ),
+            )
+            return
+        await self.client.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=(
+                "On supported Telegram apps, settings and API keys are saved "
+                "in this device's encrypted Telegram SecureStorage. They are "
+                "sent to the bot only when you use them for a podcast. Use "
+                "/start to create one; older apps can use the in-chat fallback."
+            ),
+            reply_markup={
+                "inline_keyboard": [
+                    [self._web_app_button("Open device settings", url)]
+                ]
+            },
+        )
+
+    @staticmethod
+    def _webapp_url() -> str:
+        from ..settings import PROJECT_DIR, load_env_file
+
+        load_env_file(PROJECT_DIR / ".env")
+        configured_url = os.environ.get("TELEGRAM_WEBHOOK_URL", "").strip()
+        if not configured_url:
+            return ""
+        parsed = urlsplit(configured_url)
+        suffix = "/telegram/webhook"
+        if parsed.scheme != "https" or not parsed.path.rstrip("/").endswith(suffix):
+            return ""
+        prefix = parsed.path.rstrip("/")[: -len(suffix)]
+        return urlunsplit(
+            (parsed.scheme, parsed.netloc, f"{prefix}/telegram/webapp", "", "")
+        )
+
+    @staticmethod
+    def _web_app_button(text: str, url: str) -> dict[str, Any]:
+        return {"text": text, "web_app": {"url": url}}
 
     async def _send_start_hint(self, chat_id: int) -> None:
         await self.client.call(
@@ -368,14 +481,38 @@ class TelegramPodcastBot:
         if not isinstance(data, str):
             return
 
+        session = self.sessions.get(user_id)
+        if data == "setup:chat" and session is not None:
+            session.stage = "choose_provider"
+            await self.client.call(
+                "sendMessage",
+                chat_id=chat_id,
+                text="Choose the script provider for this podcast:",
+                reply_markup=self._keyboard(
+                    [("Groq", "provider:groq"), ("Gemini", "provider:gemini")],
+                    [("OpenAI", "provider:openai")],
+                ),
+            )
+            return
+
         if data.startswith("provider:"):
             provider = data.partition(":")[2]
             if provider not in PROVIDERS:
                 return
-            session = TelegramSession(
-                user_id=user_id, chat_id=chat_id, stage="provider_key", provider=provider
-            )
-            self.sessions[user_id] = session
+            if session is None or session.source_path is None:
+                session = TelegramSession(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    stage="provider_key",
+                    provider=provider,
+                )
+                self.sessions[user_id] = session
+            else:
+                session.stage = "provider_key"
+                session.provider = provider
+                session.model = provider_models(provider)[0]
+                session.provider_key = ""
+                session.gemini_key = ""
             await self.client.call(
                 "sendMessage",
                 chat_id=chat_id,
@@ -406,7 +543,11 @@ class TelegramPodcastBot:
                 session.model = models[int(choice)]
                 await self._after_model_selection(session)
         elif data == "gemini:skip" and session.stage == "gemini_key":
-            await self._show_modes(session)
+            if session.source_path is not None:
+                session.tts_provider = "edge"
+                await self._show_tts_options(session)
+            else:
+                await self._show_modes(session)
         elif data.startswith("mode:") and session.stage == "choose_mode":
             mode = data.partition(":")[2]
             if mode not in {"pdf", "script"}:
@@ -421,7 +562,7 @@ class TelegramPodcastBot:
             )
         elif data == "customize:no" and session.stage == "customize_choice":
             session.preferences = load_preferences(PREFERENCES_FILE)
-            await self._show_tts_options(session)
+            await self._show_generation_options(session)
         elif data == "customize:yes" and session.stage == "customize_choice":
             session.preferences = load_preferences(PREFERENCES_FILE)
             session.stage = "conversation_style"
@@ -440,11 +581,17 @@ class TelegramPodcastBot:
                 await self._advance_preference(session, field, "")
         elif data == "tts:edge" and session.stage == "choose_tts":
             session.tts_provider = "edge"
-            await self._start_generation(session)
+            if session.source_path is not None:
+                await self._start_generation(session)
+            else:
+                await self._show_modes(session)
         elif data == "tts:gemini" and session.stage == "choose_tts":
             if session.gemini_key:
                 session.tts_provider = "gemini"
-                await self._start_generation(session)
+                if session.source_path is not None:
+                    await self._start_generation(session)
+                else:
+                    await self._show_modes(session)
             else:
                 session.stage = "gemini_tts_key"
                 await self.client.call(
@@ -484,7 +631,11 @@ class TelegramPodcastBot:
                 )
                 return
             elif session.stage == "gemini_key":
-                await self._show_modes(session)
+                if session.source_path is not None:
+                    session.tts_provider = "edge"
+                    await self._show_tts_options(session)
+                else:
+                    await self._show_modes(session)
                 return
             else:
                 await self.client.call(
@@ -514,7 +665,10 @@ class TelegramPodcastBot:
         if session.stage == "provider_key":
             await self._show_model_options(session)
         elif session.stage == "gemini_key":
-            await self._show_modes(session)
+            if session.source_path is not None:
+                await self._show_tts_options(session)
+            else:
+                await self._show_modes(session)
         elif session.stage == "gemini_tts_key":
             session.tts_provider = "gemini"
             await self._start_generation(session)
@@ -535,14 +689,25 @@ class TelegramPodcastBot:
 
     async def _show_modes(self, session: TelegramSession) -> None:
         session.stage = "choose_mode"
+        rows: list[list[dict[str, Any]]] = [
+            [
+                {"text": "PDF to Podcast", "callback_data": "mode:pdf"},
+                {"text": "Script to Podcast", "callback_data": "mode:script"},
+            ]
+        ]
+        webapp_url = self._webapp_url()
+        if webapp_url:
+            rows.append(
+                [self._web_app_button("Device settings", webapp_url)]
+            )
         await self.client.call(
             "sendMessage",
             chat_id=session.chat_id,
-            text="Choose how you want to create your podcast:",
-            reply_markup=self._keyboard(
-                [("PDF to Podcast", "mode:pdf")],
-                [("Script to Podcast", "mode:script")],
+            text=(
+                "Choose how to create your podcast. Quick start uses Groq for "
+                "the script and Gemini TTS for voices."
             ),
+            reply_markup={"inline_keyboard": rows},
         )
 
     async def _show_model_options(self, session: TelegramSession) -> None:
@@ -570,7 +735,10 @@ class TelegramPodcastBot:
     async def _after_model_selection(self, session: TelegramSession) -> None:
         if session.provider == "gemini":
             session.gemini_key = session.provider_key
-            await self._show_modes(session)
+            if session.source_path is not None:
+                await self._show_tts_options(session)
+            else:
+                await self._show_modes(session)
             return
         session.stage = "gemini_key"
         await self.client.call(
@@ -753,7 +921,7 @@ class TelegramPodcastBot:
         )
         next_index = index + 1
         if next_index >= len(sequence):
-            await self._show_tts_options(session)
+            await self._show_generation_options(session)
             return
         next_field, prompt = sequence[next_index]
         session.stage = next_field
@@ -819,6 +987,94 @@ class TelegramPodcastBot:
         task = asyncio.create_task(self._generate_and_deliver(session, estimate))
         self.active_tasks[session.user_id] = task
 
+    async def apply_webapp_configuration(
+        self, user_id: int, configuration: dict[str, Any]
+    ) -> None:
+        async with self._user_lock(user_id):
+            session = self.sessions.get(user_id)
+            if (
+                session is None
+                or session.chat_id != user_id
+                or session.stage != "configure"
+                or session.source_path is None
+            ):
+                raise ValueError(
+                    "No podcast is waiting for settings. Send /start and upload a file first."
+                )
+
+            provider = configuration.get("provider")
+            model = configuration.get("model")
+            tts_provider = configuration.get("tts_provider")
+            tts_model = configuration.get("tts_model", "")
+            api_key = configuration.get("api_key")
+            gemini_key = configuration.get("gemini_api_key", "")
+            preferences = configuration.get("preferences", {})
+            if provider not in PROVIDERS or tts_provider not in {"gemini", "edge"}:
+                raise ValueError("Choose a supported provider and voice option.")
+            if (
+                not isinstance(model, str)
+                or not model.strip()
+                or len(model.strip()) > 200
+                or not all(
+                    character.isalnum() or character in "._:/-_"
+                    for character in model.strip()
+                )
+            ):
+                raise ValueError("Enter a valid model identifier.")
+            if (
+                not isinstance(tts_model, str)
+                or len(tts_model.strip()) > 200
+                or (
+                    tts_model.strip()
+                    and not all(
+                        character.isalnum() or character in "._:/-_"
+                        for character in tts_model.strip()
+                    )
+                )
+            ):
+                raise ValueError("Enter a valid Gemini TTS model identifier.")
+            if not isinstance(api_key, str) or not api_key.strip():
+                raise ValueError("Enter an API key for the selected script provider.")
+            if not isinstance(gemini_key, str):
+                raise ValueError("The Gemini API key is invalid.")
+            if not isinstance(preferences, dict):
+                raise ValueError("Podcast preferences must be an object.")
+            allowed_preferences = {
+                "conversation_style",
+                "speaker_1_voice",
+                "speaker_2_voice",
+                "suggestions",
+            }
+            if preferences.keys() - allowed_preferences or any(
+                not isinstance(value, str) or len(value) > 2000
+                for value in preferences.values()
+            ):
+                raise ValueError("One or more podcast preferences are invalid.")
+
+            api_key = api_key.strip()
+            gemini_key = gemini_key.strip()
+            await validate_provider_key(provider, api_key)
+            if provider == "gemini":
+                gemini_key = gemini_key or api_key
+            if tts_provider == "gemini":
+                if not gemini_key:
+                    raise ValueError(
+                        "A Gemini API key is required for Gemini TTS. Add one or select Edge TTS."
+                    )
+                if provider != "gemini" or gemini_key != api_key:
+                    await validate_provider_key("gemini", gemini_key)
+
+            session.provider = provider
+            session.model = model.strip()
+            session.tts_model = tts_model.strip()
+            session.provider_key = api_key
+            session.gemini_key = gemini_key
+            session.tts_provider = tts_provider
+            for field, value in preferences.items():
+                if value.strip():
+                    session.preferences[field] = value.strip()
+            await self._start_generation(session)
+
     async def _generate_and_deliver(
         self, session: TelegramSession, estimate_seconds: int
     ) -> None:
@@ -883,6 +1139,7 @@ class TelegramPodcastBot:
                 session.preferences["speaker_1_voice"],
                 session.preferences["speaker_2_voice"],
                 max(0.01, job_timeout - (time.monotonic() - started_at)),
+                tts_model=session.tts_model,
             )
             await run_sync_with_progress(
                 audio_work,

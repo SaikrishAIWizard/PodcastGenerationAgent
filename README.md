@@ -11,6 +11,8 @@ FastAPI, LangGraph, DSPy, and Edge or Gemini text-to-speech.
    lists, and Telegram settings. Never commit `.env`.
 4. Ensure FFmpeg is installed and available on `PATH`.
 
+python -m podcast_generator.telegram.set_webhook
+ngrok http 8000
 Run the command-line generator with `python -m podcast_generator --help`.
 Run the HTTP API with `uvicorn podcast_generator.api.main:app --host 0.0.0.0 --port 8000`.
 Its interactive API documentation is available at `/docs`.
@@ -24,6 +26,29 @@ the selectable model IDs. Select one by sending it as `model`, or enter a
 custom model ID. Configure defaults with `GROQ_MODEL`, `OPENAI_MODEL`, and
 `GEMINI_MODEL`; add comma-separated choices with `GROQ_MODELS`, `OPENAI_MODELS`,
 and `GEMINI_MODELS`. Provider API keys do not belong in `.env`.
+
+## Deploy to Render
+
+Create a Blueprint in Render from this repository and select `render.yaml`.
+It builds the included Dockerfile, which installs FFmpeg for audio generation.
+The service listens on Render's `PORT`, runs a single worker for the in-memory
+Telegram sessions, and uses `/health` for Render's health check.
+
+The `/keep-alive` endpoint returns `{"status":"ok"}` and can be used by an
+external uptime monitor. Render's free web services sleep after 15 minutes
+without inbound traffic and can take about a minute to wake up. To reduce cold
+starts, configure an external monitor to send a `GET` request to
+`https://<your-service>.onrender.com/keep-alive` every 10-14 minutes. This
+generates inbound traffic and uses free instance hours; use a paid always-on
+instance if continuous availability is required.
+
+For the Telegram bot, set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and
+`TELEGRAM_WEBHOOK_URL` in the Render service's environment. Set the webhook URL
+to `https://<your-service>.onrender.com/telegram/webhook`, then register it
+after deployment by putting those same values in your local `.env` file and
+running `python -m podcast_generator.telegram.set_webhook`. Generated files and
+in-memory jobs are temporary: Render's filesystem is ephemeral, and restarts
+or spin-downs clear local files and active Telegram sessions.
 
 ## Telegram webhook
 
@@ -49,13 +74,31 @@ Start the API, then register or update the webhook:
 python -m podcast_generator.telegram.set_webhook
 ```
 
+Webhook registration also installs the Telegram bot menu commands:
+`/devicesettings`, `/pdf2podcast`, and `/script2podcast`. Run the registration
+command again after updating the deployment to refresh the menu. `/start` and
+`/cancel` remain available as additional commands.
+
 Transient Telegram HTTPS connection failures are retried up to five times with
 exponential backoff for Bot API calls and file downloads.
 
-In a private chat, send `/start`, choose the LLM provider and model, and provide
-your own key when prompted. The bot validates keys and attempts to delete key
-messages from the chat. A Gemini key is needed for Gemini TTS; Edge TTS remains
-available without it. The bot never uses a server-side provider key.
+In a private chat, send `/start` and upload a PDF or TXT file. Quick start uses
+the configured Groq model for script generation and Gemini TTS with the
+configured `GEMINI_TTS_MODEL`. After the file is checked, open the settings
+Web App to use or edit device-local provider keys, model, TTS provider/model,
+and podcast preferences. `/settings` opens the same form at any time.
+
+The Web App saves settings and API keys in Telegram SecureStorage on supported
+clients (encrypted at rest by the device's secure storage); they are
+device-specific and do not sync across devices. If SecureStorage is unavailable,
+the Web App saves preferences only and does not persist keys. When starting a
+job, the form sends selected credentials over HTTPS to the app. The app
+validates them and keeps them in process memory only for the active job/session;
+it does not persist them. If the Telegram client cannot open the Web App or
+does not support SecureStorage, use **Configure in chat (fallback)** after the
+file is checked. In fallback mode keys are entered in chat, deleted where
+Telegram allows, and retained only in the active in-memory session. Gemini TTS
+requires a Gemini API key; Edge TTS does not.
 
 The webhook queues generation in an in-process background task and returns
 quickly. Sessions, credentials, duplicate-update tracking, and queued tasks are

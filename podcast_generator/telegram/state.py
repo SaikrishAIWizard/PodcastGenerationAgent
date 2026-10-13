@@ -11,6 +11,7 @@ class TelegramSession:
     stage: str = "choose_provider"
     provider: str = ""
     model: str = ""
+    tts_model: str = ""
     provider_key: str = ""
     gemini_key: str = ""
     mode: str = ""

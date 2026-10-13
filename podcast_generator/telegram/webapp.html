@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Podcast settings</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+        --background: var(--tg-theme-bg-color, #fff);
+        --foreground: var(--tg-theme-text-color, #202124);
+        --muted: var(--tg-theme-hint-color, #70757a);
+        --surface: var(--tg-theme-secondary-bg-color, #f1f3f4);
+        --accent: var(--tg-theme-button-color, #2481cc);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0 auto;
+        max-width: 620px;
+        padding: 20px 16px 32px;
+        background: var(--background);
+        color: var(--foreground);
+      }
+      h1 { margin: 0 0 8px; font-size: 1.45rem; }
+      p { line-height: 1.45; }
+      .note { color: var(--muted); font-size: .9rem; }
+      form { display: grid; gap: 14px; }
+      label { display: grid; gap: 6px; font-weight: 600; }
+      input, select, textarea, button {
+        width: 100%;
+        min-height: 44px;
+        border: 1px solid var(--muted);
+        border-radius: 9px;
+        padding: 10px 12px;
+        background: var(--background);
+        color: var(--foreground);
+        font: inherit;
+      }
+      textarea { min-height: 72px; resize: vertical; }
+      button { border: 0; background: var(--accent); color: #fff; font-weight: 700; }
+      button.secondary { border: 1px solid var(--muted); background: var(--surface); color: var(--foreground); }
+      .actions { display: grid; gap: 10px; margin-top: 4px; }
+      #status { min-height: 1.4em; color: var(--muted); }
+      .warning { padding: 12px; border-radius: 9px; background: var(--surface); }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <h1>Podcast settings</h1>
+    <p class="note">Choose your script provider, model, and voice provider. On supported Telegram apps, settings and API keys are stored in Telegram's encrypted device SecureStorage. They are sent securely to the bot only when you use them for a podcast; the bot keeps them in memory for that job and does not save them.</p>
+    <p class="warning note">SecureStorage is device-specific and does not sync across phones or computers. If this Telegram app does not support SecureStorage, settings may be saved without keys; use the in-chat fallback for keys.</p>
+
+    <form id="settings">
+      <label>Script provider
+        <select id="provider">
+          <option value="groq">Groq (default)</option>
+          <option value="gemini">Gemini</option>
+          <option value="openai">OpenAI</option>
+        </select>
+      </label>
+      <label>Script model
+        <select id="model"></select>
+      </label>
+      <label id="custom-model-label" hidden>Custom model ID
+        <input id="custom-model" maxlength="200" autocomplete="off">
+      </label>
+      <label>Script provider API key
+        <input id="script-key" type="password" autocomplete="off" autocapitalize="off">
+      </label>
+      <label id="gemini-key-label">Gemini API key for Gemini TTS
+        <input id="gemini-key" type="password" autocomplete="off" autocapitalize="off">
+      </label>
+      <label>Voice provider
+        <select id="tts-provider">
+          <option value="gemini">Gemini TTS (default)</option>
+          <option value="edge">Edge TTS (no Gemini key required)</option>
+        </select>
+      </label>
+      <label id="tts-model-label">Gemini TTS model
+        <input id="tts-model" maxlength="200" autocomplete="off">
+      </label>
+      <label>Conversation style (optional)
+        <input id="conversation-style" maxlength="300" placeholder="e.g. friendly interview">
+      </label>
+      <label>Host voice (optional)
+        <input id="speaker-1-voice" maxlength="120">
+      </label>
+      <label>Expert voice (optional)
+        <input id="speaker-2-voice" maxlength="120">
+      </label>
+      <label>Extra instructions (optional)
+        <textarea id="suggestions" maxlength="2000"></textarea>
+      </label>
+      <div class="actions">
+        <button class="secondary" id="save-local" type="button">Save on this device</button>
+        <button id="use-job" type="button">Use settings for current podcast</button>
+        <button class="secondary" id="clear-local" type="button">Clear saved settings and keys</button>
+      </div>
+      <p id="status" role="status" aria-live="polite"></p>
+    </form>
+
+    <script>
+      (() => {
+        const secureSettingsKey = "podcast-generator-settings-v1";
+        const secureKeyNames = {
+          groq: "podcast-generator-key-groq-v1",
+          gemini: "podcast-generator-key-gemini-v1",
+          openai: "podcast-generator-key-openai-v1",
+        };
+        const preferencesKey = "podcast-generator-preferences-v1";
+        const legacyKey = "podcast-generator.telegram.settings.v1";
+        const telegram = window.Telegram && window.Telegram.WebApp;
+        const secureStorage = telegram && telegram.SecureStorage;
+        const routePrefix = window.location.pathname.replace(
+          /\/telegram\/webapp\/?$/,
+          "/"
+        );
+        const apiUrl = (path) => `${routePrefix}${path.replace(/^\/+/, "")}`;
+        const hasSecureStorage = Boolean(
+          secureStorage &&
+          secureStorage.getItem &&
+          secureStorage.setItem &&
+          secureStorage.removeItem
+        );
+        const byId = (id) => document.getElementById(id);
+        const status = (message) => { byId("status").textContent = message; };
+        let providerCatalog = {};
+        let saved = {
+          provider: "groq",
+          model: "",
+          tts_provider: "gemini",
+          tts_model: "",
+          keys: {},
+          preferences: {},
+        };
+
+        telegram?.ready();
+        telegram?.expand();
+
+        function storageCall(method, ...args) {
+          return new Promise((resolve, reject) => {
+            secureStorage[method](...args, (error, value) => {
+              if (error) reject(error);
+              else resolve(value);
+            });
+          });
+        }
+
+        function selectedModel() {
+          return byId("model").value === "__custom__"
+            ? byId("custom-model").value.trim()
+            : byId("model").value;
+        }
+
+        function renderModels(keepModel) {
+          const provider = byId("provider").value;
+          const catalog = providerCatalog[provider] || { models: [], default_model: "" };
+          const select = byId("model");
+          select.replaceChildren();
+          for (const model of catalog.models) {
+            const option = document.createElement("option");
+            option.value = model;
+            option.textContent = model + (model === catalog.default_model ? " (default)" : "");
+            select.append(option);
+          }
+          const custom = document.createElement("option");
+          custom.value = "__custom__";
+          custom.textContent = "Enter a custom model ID";
+          select.append(custom);
+          const requested = keepModel || catalog.default_model;
+          if ([...select.options].some((option) => option.value === requested)) {
+            select.value = requested;
+          } else if (requested) {
+            select.value = "__custom__";
+            byId("custom-model").value = requested;
+          }
+          byId("custom-model-label").hidden = select.value !== "__custom__";
+          byId("gemini-key-label").hidden = provider === "gemini";
+          byId("script-key").value = saved.keys[provider] || "";
+          byId("gemini-key").value = saved.keys.gemini || "";
+        }
+
+        function readForm() {
+          const provider = byId("provider").value;
+          const keys = { ...(saved.keys || {}) };
+          keys[provider] = byId("script-key").value.trim();
+          if (provider === "gemini") {
+            keys.gemini = keys[provider];
+          } else {
+            keys.gemini = byId("gemini-key").value.trim();
+          }
+          return {
+            provider,
+            model: selectedModel(),
+            tts_provider: byId("tts-provider").value,
+            tts_model: byId("tts-model").value.trim(),
+            keys,
+            preferences: {
+              conversation_style: byId("conversation-style").value.trim(),
+              speaker_1_voice: byId("speaker-1-voice").value.trim(),
+              speaker_2_voice: byId("speaker-2-voice").value.trim(),
+              suggestions: byId("suggestions").value.trim(),
+            },
+          };
+        }
+
+        async function persist() {
+          saved = readForm();
+          if (hasSecureStorage) {
+            const { keys, ...settings } = saved;
+            const settingsStored = await storageCall(
+              "setItem",
+              secureSettingsKey,
+              JSON.stringify(settings)
+            );
+            if (settingsStored !== true) throw new Error("Settings were not stored.");
+            for (const [provider, key] of Object.entries(secureKeyNames)) {
+              const value = saved.keys[provider] || "";
+              if (value) {
+                const keyStored = await storageCall("setItem", key, value);
+                if (keyStored !== true) throw new Error("API key was not stored.");
+              } else {
+                await storageCall("removeItem", key);
+              }
+            }
+            localStorage.removeItem(preferencesKey);
+            return true;
+          }
+          const { keys, ...preferences } = saved;
+          saved.keys = {};
+          localStorage.setItem(preferencesKey, JSON.stringify(preferences));
+          localStorage.removeItem(legacyKey);
+          return false;
+        }
+
+        async function useForJob() {
+          if (!hasSecureStorage) {
+            status("Secure key storage is unavailable in this Telegram app. Use Configure in chat after uploading.");
+            return;
+          }
+          if (!telegram || !telegram.initData) {
+            status("Open this page using its button inside Telegram.");
+            return;
+          }
+          try {
+            await persist();
+          } catch {
+            status("Could not save keys in Telegram SecureStorage. Use the in-chat fallback.");
+            return;
+          }
+          const apiKey = saved.keys[saved.provider] || "";
+          if (!apiKey) {
+            status("Enter an API key for the selected script provider.");
+            return;
+          }
+          if (saved.tts_provider === "gemini" && !saved.keys.gemini) {
+            status("Gemini TTS needs a Gemini API key. Add it or select Edge TTS.");
+            return;
+          }
+          byId("use-job").disabled = true;
+          status("Validating settings and starting your podcast…");
+          try {
+            const response = await fetch(apiUrl("telegram/webapp/configure"), {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Telegram-Init-Data": telegram.initData,
+              },
+              body: JSON.stringify({
+                provider: saved.provider,
+                model: saved.model,
+                tts_provider: saved.tts_provider,
+                tts_model: saved.tts_model,
+                api_key: apiKey,
+                gemini_api_key: saved.keys.gemini || "",
+                preferences: saved.preferences,
+              }),
+            });
+            const result = await response.json();
+            if (!response.ok) {
+              status(result.detail || "Could not start the podcast. Please try again.");
+              return;
+            }
+            status("Podcast started. You can return to the chat.");
+            telegram.close();
+          } catch {
+            status("Could not reach the bot. Check your connection and retry.");
+          } finally {
+            byId("use-job").disabled = false;
+          }
+        }
+
+        byId("provider").addEventListener("change", () => {
+          saved.keys[saved.provider] = byId("script-key").value.trim();
+          renderModels("");
+        });
+        byId("tts-provider").addEventListener("change", () => {
+          byId("tts-model-label").hidden = byId("tts-provider").value !== "gemini";
+        });
+        byId("model").addEventListener("change", () => {
+          byId("custom-model-label").hidden = byId("model").value !== "__custom__";
+        });
+        byId("save-local").addEventListener("click", async () => {
+          try {
+            const keysSavedSecurely = await persist();
+            status(
+              keysSavedSecurely
+                ? "Settings and API keys saved in Telegram SecureStorage on this device."
+                : "Preferences saved on this device. This Telegram app has no SecureStorage, so API keys were not saved. Use the in-chat fallback."
+            );
+          } catch {
+            status("Could not save to device storage. Keys were not saved.");
+          }
+        });
+        byId("use-job").addEventListener("click", useForJob);
+        byId("clear-local").addEventListener("click", async () => {
+          try {
+            if (hasSecureStorage) {
+              await storageCall("removeItem", secureSettingsKey);
+              for (const key of Object.values(secureKeyNames)) {
+                await storageCall("removeItem", key);
+              }
+            }
+            localStorage.removeItem(preferencesKey);
+            localStorage.removeItem(legacyKey);
+            saved = {
+              provider: "groq",
+              model: "",
+              tts_provider: "gemini",
+              tts_model: "",
+              keys: {},
+              preferences: {},
+            };
+            byId("provider").value = "groq";
+            byId("tts-provider").value = "gemini";
+            byId("tts-model-label").hidden = false;
+            byId("script-key").value = "";
+            byId("gemini-key").value = "";
+            byId("conversation-style").value = "";
+            byId("speaker-1-voice").value = "";
+            byId("speaker-2-voice").value = "";
+            byId("suggestions").value = "";
+            renderModels("");
+            status("Saved settings and keys were cleared from this device.");
+          } catch {
+            status("Could not clear secure settings. Try again from Telegram.");
+          }
+        });
+
+        async function initialize() {
+          try {
+            localStorage.removeItem(legacyKey);
+            if (hasSecureStorage) {
+              const stored = await storageCall("getItem", secureSettingsKey);
+              if (stored) saved = { ...saved, ...JSON.parse(stored) };
+              for (const [provider, key] of Object.entries(secureKeyNames)) {
+                const value = await storageCall("getItem", key);
+                if (typeof value === "string") saved.keys[provider] = value;
+              }
+            } else {
+              const stored = localStorage.getItem(preferencesKey);
+              if (stored) {
+                saved = {
+                  ...saved,
+                  ...JSON.parse(stored),
+                  keys: {},
+                };
+              }
+            }
+          } catch {
+            status("Saved settings could not be read; defaults are shown.");
+          }
+          byId("provider").value = ["groq", "gemini", "openai"].includes(saved.provider)
+            ? saved.provider
+            : "groq";
+          byId("tts-provider").value = saved.tts_provider === "edge" ? "edge" : "gemini";
+          byId("tts-model-label").hidden = byId("tts-provider").value !== "gemini";
+          byId("tts-model").value = saved.tts_model || "";
+          byId("conversation-style").value = saved.preferences?.conversation_style || "";
+          byId("speaker-1-voice").value = saved.preferences?.speaker_1_voice || "";
+          byId("speaker-2-voice").value = saved.preferences?.speaker_2_voice || "";
+          byId("suggestions").value = saved.preferences?.suggestions || "";
+
+          const [providers, defaults] = await Promise.all([
+            fetch(apiUrl("providers")).then((response) => response.ok ? response.json() : Promise.reject()),
+            fetch(apiUrl("telegram/webapp/defaults")).then((response) => response.ok ? response.json() : Promise.reject()),
+          ]).catch(() => [null, null]);
+          if (providers) {
+            providerCatalog = providers;
+          } else {
+            providerCatalog = {
+              groq: { default_model: "llama-3.3-70b-versatile", models: ["llama-3.3-70b-versatile"] },
+              gemini: { default_model: "gemini-2.5-flash", models: ["gemini-2.5-flash"] },
+              openai: { default_model: "gpt-4o-mini", models: ["gpt-4o-mini"] },
+            };
+            status("Showing built-in model defaults; custom model choices could not be loaded.");
+          }
+          if (!byId("tts-model").value) {
+            byId("tts-model").value = defaults?.tts_model || "gemini-3.8-flash-tts";
+          }
+          renderModels(saved.model);
+          if (!hasSecureStorage) {
+            status("This Telegram app does not support secure key storage. Use the in-chat fallback for API keys.");
+          }
+        }
+
+        initialize();
+      })();
+    </script>
+  </body>
+</html>

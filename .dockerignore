@@ -1,0 +1,11 @@
+.env
+.git
+.kilo
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+tests
+output
+input/*.pdf
+input/*.txt

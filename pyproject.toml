@@ -24,3 +24,6 @@ podcast-telegram-set-webhook = "podcast_generator.telegram.set_webhook:main"
 
 [tool.setuptools.packages.find]
 include = ["podcast_generator*"]
+
+[tool.setuptools.package-data]
+"podcast_generator.telegram" = ["webapp.html"]

@@ -35,6 +35,13 @@ app.include_router(telegram_router)
 jobs: dict[str, tuple[Path, Path]] = {}
 
 
+@app.get("/health")
+@app.get("/keep-alive")
+async def health_check() -> dict[str, str]:
+    """Report that the service is responding to Render and uptime monitors."""
+    return {"status": "ok"}
+
+
 class PodcastResponse(BaseModel):
     job_id: str
     script_url: str

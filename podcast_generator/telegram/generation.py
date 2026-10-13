@@ -126,13 +126,15 @@ def generate_audio_file(
     speaker_1_voice: str,
     speaker_2_voice: str,
     timeout_seconds: float | None = None,
+    tts_model: str = "",
 ) -> Path:
     """Synthesize the generated script using per-session voice settings."""
     return audio.convert_to_mp3(
         script_path,
         destination,
         tts_provider=tts_provider,
-        tts_model=os.environ.get("GEMINI_TTS_MODEL", "").strip()
+        tts_model=tts_model.strip()
+        or os.environ.get("GEMINI_TTS_MODEL", "").strip()
         or "gemini-3.8-flash-tts",
         speaker_1_voice=speaker_1_voice or None,
         speaker_2_voice=speaker_2_voice or None,

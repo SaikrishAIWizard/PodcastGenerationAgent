@@ -33,7 +33,32 @@ async def register_webhook() -> None:
         secret_token=secret,
         allowed_updates=["message", "callback_query"],
     )
-    print("Telegram webhook registered.")
+    await client.call(
+        "setMyCommands",
+        commands=[
+            {
+                "command": "devicesettings",
+                "description": "Configure provider, model, and device settings",
+            },
+            {
+                "command": "pdf2podcast",
+                "description": "Create a podcast from a PDF",
+            },
+            {
+                "command": "script2podcast",
+                "description": "Create a podcast from a TXT script",
+            },
+            {
+                "command": "start",
+                "description": "Show podcast options",
+            },
+            {
+                "command": "cancel",
+                "description": "Cancel the current podcast session",
+            },
+        ],
+    )
+    print("Telegram webhook registered and bot menu commands updated.")
 
 
 def main() -> None:
