@@ -14,6 +14,7 @@ from podcast_generator.telegram.generation import (
     read_source_text,
     safe_basename,
 )
+from podcast_generator.telegram.state import TelegramSession
 from podcast_generator.settings import provider_models
 
 
@@ -79,7 +80,7 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
             {"mode:pdf", "mode:script"},
         )
 
-    async def test_pdf_menu_command_starts_at_pdf_upload(self):
+    async def test_pdf_menu_command_shows_learning_goal_options(self):
         await self.bot.process_update(
             {
                 "update_id": 20,
@@ -88,9 +89,87 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
         )
 
         session = self.bot.sessions[10]
-        self.assertEqual(session.stage, "upload_pdf")
+        self.assertEqual(session.stage, "choose_pdf_goal")
         self.assertEqual(session.mode, "pdf")
+        choices = {
+            button["callback_data"]
+            for row in self.client.calls[-1][1]["reply_markup"]["inline_keyboard"]
+            for button in row
+        }
+        self.assertEqual(
+            choices,
+            {
+                "pdfgoal:general",
+                "pdfgoal:exam",
+                "pdfgoal:research",
+                "pdfgoal:interview",
+                "pdfgoal:concepts",
+                "pdfgoal:custom",
+            },
+        )
+
+    async def test_pdf_goal_sets_source_grounded_task_guidance(self):
+        await self.bot.process_update(
+            {
+                "update_id": 25,
+                "message": private_message(10, 10, 25, text="/pdf2podcast"),
+            }
+        )
+        await self.bot.process_update(
+            {
+                "update_id": 26,
+                "callback_query": {
+                    "id": "exam-goal",
+                    "from": {"id": 10},
+                    "message": {"chat": {"id": 10, "type": "private"}},
+                    "data": "pdfgoal:exam",
+                },
+            }
+        )
+
+        session = self.bot.sessions[10]
+        self.assertEqual(session.stage, "upload_pdf")
+        self.assertIn("exam revision", session.task_guidance)
+        self.assertIn("Do not claim to predict", session.task_guidance)
         self.assertIn("Upload your PDF", self.client.calls[-1][1]["text"])
+
+    async def test_custom_pdf_prompt_is_saved_before_upload(self):
+        await self.bot.process_update(
+            {
+                "update_id": 27,
+                "message": private_message(10, 10, 27, text="/pdf2podcast"),
+            }
+        )
+        await self.bot.process_update(
+            {
+                "update_id": 28,
+                "callback_query": {
+                    "id": "custom-goal",
+                    "from": {"id": 10},
+                    "message": {"chat": {"id": 10, "type": "private"}},
+                    "data": "pdfgoal:custom",
+                },
+            }
+        )
+        self.assertEqual(self.bot.sessions[10].stage, "custom_task_prompt")
+        await self.bot.process_update(
+            {
+                "update_id": 29,
+                "message": private_message(
+                    10,
+                    10,
+                    29,
+                    text="Explain each theorem and create practice questions.",
+                ),
+            }
+        )
+
+        session = self.bot.sessions[10]
+        self.assertEqual(session.stage, "upload_pdf")
+        self.assertEqual(
+            session.task_guidance,
+            "Explain each theorem and create practice questions.",
+        )
 
     async def test_script_menu_command_starts_at_script_upload(self):
         await self.bot.process_update(
@@ -265,6 +344,124 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
         self.bot.sessions[10].provider_key = "user-ten-key"
         self.assertEqual(self.bot.sessions[20].provider_key, "")
 
+    async def test_help_and_provider_key_commands_show_guidance_and_official_links(self):
+        await self.bot.process_update(
+            {
+                "update_id": 60,
+                "message": private_message(10, 10, 60, text="/help"),
+            }
+        )
+        self.assertIn("How to make a podcast", self.client.calls[-1][1]["text"])
+
+        await self.bot.process_update(
+            {
+                "update_id": 61,
+                "message": private_message(10, 10, 61, text="/keys"),
+            }
+        )
+        keyboard = self.client.calls[-1][1]["reply_markup"]["inline_keyboard"]
+        self.assertEqual(
+            [row[0]["url"] for row in keyboard],
+            [
+                "https://console.groq.com/keys",
+                "https://platform.openai.com/api-keys",
+                "https://aistudio.google.com/app/apikey",
+            ],
+        )
+
+    async def test_usage_command_shows_global_and_personal_counts(self):
+        with patch(
+            "podcast_generator.telegram.bot.get_usage",
+            new=AsyncMock(
+                return_value={
+                    "total_successful_deliveries": 9,
+                    "user_successful_deliveries": 2,
+                }
+            ),
+        ):
+            await self.bot.process_update(
+                {
+                    "update_id": 62,
+                    "message": private_message(10, 10, 62, text="/usage"),
+                }
+            )
+
+        self.assertIn("All users: 9", self.client.calls[-1][1]["text"])
+        self.assertIn("You: 2", self.client.calls[-1][1]["text"])
+
+    async def test_delivery_is_counted_only_after_telegram_accepts_audio(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source_path = Path(folder) / "source.txt"
+            source_path.write_text("Podcast source text.", encoding="utf-8")
+            session = TelegramSession(
+                user_id=10,
+                chat_id=10,
+                username="podcast_user",
+                stage="generating",
+                task_guidance="Prepare an exam revision lesson.",
+                provider="groq",
+                model="test-model",
+                provider_key="test-key",
+                tts_provider="edge",
+                source_path=source_path,
+                original_filename="source.txt",
+                temporary_directory=Path(folder),
+            )
+            self.bot.sessions[10] = session
+
+            async def run_work(work, **_kwargs):
+                return work()
+
+            def generate_script(_source, path, *_args):
+                Path(path).write_text("HOST: Hello", encoding="utf-8")
+
+            def generate_audio(_script, path, *_args, **_kwargs):
+                Path(path).write_bytes(b"mp3")
+
+            async def record_after_send(user_id, username):
+                self.assertTrue(
+                    any(method == "sendAudio" for method, _ in self.client.calls)
+                )
+                return {
+                    "total_successful_deliveries": 1,
+                    "user_successful_deliveries": 1,
+                }
+
+            with (
+                patch(
+                    "podcast_generator.telegram.bot.run_sync_with_progress",
+                    new=AsyncMock(side_effect=run_work),
+                ),
+                patch(
+                    "podcast_generator.telegram.bot.generate_script_file",
+                    side_effect=generate_script,
+                ) as generate_script_mock,
+                patch(
+                    "podcast_generator.telegram.bot.generate_audio_file",
+                    side_effect=generate_audio,
+                ),
+                patch(
+                    "podcast_generator.telegram.bot.record_successful_delivery",
+                    new=AsyncMock(side_effect=record_after_send),
+                ) as record_usage,
+            ):
+                await self.bot._generate_and_deliver(session, 9999)
+
+        record_usage.assert_awaited_once_with(10, "podcast_user")
+        self.assertIn(
+            session.task_guidance,
+            generate_script_mock.call_args.args[5],
+        )
+        self.assertIn(
+            "All users: 1",
+            next(
+                data["text"]
+                for method, data in self.client.calls
+                if method == "sendMessage"
+                and "delivered successfully" in data.get("text", "")
+            ),
+        )
+
 
 class TelegramValidationTests(unittest.TestCase):
     def test_file_name_is_sanitized_and_extension_is_replaced(self):
@@ -345,6 +542,11 @@ class TelegramMenuRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [entry["command"] for entry in commands[:3]],
             ["devicesettings", "pdf2podcast", "script2podcast"],
+        )
+        self.assertTrue(
+            {"keys", "usage", "help"}.issubset(
+                {entry["command"] for entry in commands}
+            )
         )
 
 

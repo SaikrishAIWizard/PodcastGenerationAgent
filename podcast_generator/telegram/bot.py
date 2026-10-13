@@ -33,12 +33,39 @@ from .generation import (
     safe_basename,
 )
 from .state import TelegramSession
+from .usage import UsageStoreError, get_usage, record_successful_delivery
 
 logger = logging.getLogger(__name__)
 
 UPDATE_DEDUPE_LIMIT = 20_000
 UPDATE_DEDUPE_TTL_SECONDS = 24 * 60 * 60
 MAX_AUDIO_DELIVERY_ATTEMPTS = 3
+PDF_TASK_GUIDANCE = {
+    "exam": (
+        "Prepare a source-grounded exam revision lesson. Identify the key "
+        "concepts and distinctions, explain why answers are correct, and "
+        "include practice questions with answers based only on the source. "
+        "Do not claim to predict actual exam questions."
+    ),
+    "research": (
+        "Explain the research paper for a learner. Cover its research question, "
+        "motivation, methods, evidence, findings, and stated limitations. "
+        "Define technical terms and clearly say when a detail is not provided "
+        "in the source; do not invent context or results."
+    ),
+    "interview": (
+        "Prepare a job seeker for interviews using this source. Explain the "
+        "relevant concepts and generate likely practice interview questions "
+        "with clear, source-grounded sample answers. Do not invent personal "
+        "work experience or claim the questions will appear in an interview."
+    ),
+    "concepts": (
+        "Teach the source's concepts step by step for a student or employee. "
+        "Explain definitions, how ideas connect, and source-supported examples; "
+        "finish with a concise recap and knowledge-check questions with answers. "
+        "Do not add unsupported facts."
+    ),
+}
 
 
 class TelegramPodcastBot:
@@ -183,6 +210,12 @@ class TelegramPodcastBot:
             return None
         return sender["id"], chat["id"]
 
+    @staticmethod
+    def _username(message: dict[str, Any]) -> str:
+        sender = message.get("from")
+        username = sender.get("username") if isinstance(sender, dict) else None
+        return username if isinstance(username, str) else ""
+
     async def _handle_message(self, message: dict[str, Any]) -> None:
         identity = self._private_user(message)
         if identity is None:
@@ -196,16 +229,26 @@ class TelegramPodcastBot:
             else ""
         )
         if command == "/start":
-            await self._start(user_id, chat_id)
+            await self._start(user_id, chat_id, username=self._username(message))
             return
         if command in {"/settings", "/configure", "/devicesettings"}:
             await self._show_device_settings(chat_id)
+            return
+        if command in {"/usage", "/stats"}:
+            await self._show_usage(chat_id, user_id)
+            return
+        if command == "/keys":
+            await self._show_api_key_links(chat_id)
+            return
+        if command == "/help":
+            await self._show_help(chat_id)
             return
         if command in {"/pdf2podcast", "/script2podcast"}:
             await self._start(
                 user_id,
                 chat_id,
                 mode="pdf" if command == "/pdf2podcast" else "script",
+                username=self._username(message),
             )
             return
         if command == "/cancel":
@@ -226,6 +269,25 @@ class TelegramPodcastBot:
                 )
                 return
             await self._handle_key_message(session, message, text)
+            return
+        if session.stage == "custom_task_prompt":
+            if not isinstance(text, str) or not text.strip():
+                await self.client.call(
+                    "sendMessage",
+                    chat_id=chat_id,
+                    text="Please send a non-empty custom podcast instruction.",
+                )
+                return
+            prompt = text.strip()
+            if len(prompt) > 2000:
+                await self.client.call(
+                    "sendMessage",
+                    chat_id=chat_id,
+                    text="Keep the custom instruction under 2,000 characters.",
+                )
+                return
+            session.task_guidance = prompt
+            await self._ask_for_upload(session)
             return
         if session.stage == "custom_model":
             if not isinstance(text, str) or not text.strip():
@@ -296,7 +358,11 @@ class TelegramPodcastBot:
         )
 
     async def _start(
-        self, user_id: int, chat_id: int, mode: str | None = None
+        self,
+        user_id: int,
+        chat_id: int,
+        mode: str | None = None,
+        username: str = "",
     ) -> None:
         old_task = self.active_tasks.get(user_id)
         if old_task and not old_task.done():
@@ -314,6 +380,7 @@ class TelegramPodcastBot:
         session = TelegramSession(
             user_id=user_id,
             chat_id=chat_id,
+            username=username,
             stage="choose_mode",
             provider="groq",
             model=provider_models("groq")[0],
@@ -335,13 +402,39 @@ class TelegramPodcastBot:
             await self._show_modes(session)
         else:
             session.mode = mode
-            session.stage = "upload_pdf" if mode == "pdf" else "upload_txt"
-            extension = "PDF" if mode == "pdf" else "TXT"
-            await self.client.call(
-                "sendMessage",
-                chat_id=chat_id,
-                text=f"Upload your {extension} file as a document attachment.",
-            )
+            if mode == "pdf":
+                await self._show_pdf_goals(session)
+            else:
+                await self._ask_for_upload(session)
+
+    async def _show_pdf_goals(self, session: TelegramSession) -> None:
+        session.stage = "choose_pdf_goal"
+        await self.client.call(
+            "sendMessage",
+            chat_id=session.chat_id,
+            text=(
+                "What should this PDF podcast help you with? The default keeps "
+                "the usual complete, source-grounded explanation. Choose a "
+                "learning goal or provide your own instruction."
+            ),
+            reply_markup=self._keyboard(
+                [("General podcast (default)", "pdfgoal:general")],
+                [("Exam preparation", "pdfgoal:exam")],
+                [("Research paper explanation", "pdfgoal:research")],
+                [("Job interview preparation", "pdfgoal:interview")],
+                [("Understand the concepts", "pdfgoal:concepts")],
+                [("Write my own prompt", "pdfgoal:custom")],
+            ),
+        )
+
+    async def _ask_for_upload(self, session: TelegramSession) -> None:
+        extension = "PDF" if session.mode == "pdf" else "TXT"
+        session.stage = "upload_pdf" if session.mode == "pdf" else "upload_txt"
+        await self.client.call(
+            "sendMessage",
+            chat_id=session.chat_id,
+            text=f"Upload your {extension} file as a document attachment.",
+        )
 
     async def _show_generation_options(self, session: TelegramSession) -> None:
         session.stage = "configure"
@@ -405,6 +498,66 @@ class TelegramPodcastBot:
                     [self._web_app_button("Open device settings", url)]
                 ]
             },
+        )
+
+    async def _show_usage(self, chat_id: int, user_id: int) -> None:
+        counts = await get_usage(user_id)
+        await self.client.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=(
+                "Successful podcast deliveries\n"
+                f"All users: {counts['total_successful_deliveries']}\n"
+                f"You: {counts['user_successful_deliveries']}"
+            ),
+        )
+
+    async def _show_api_key_links(self, chat_id: int) -> None:
+        await self.client.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=(
+                "Create or manage your API keys with the providers. "
+                "The bot cannot create keys for you. Keep keys private; "
+                "enter them only in the secure settings page or bot chat."
+            ),
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Groq API keys",
+                            "url": "https://console.groq.com/keys",
+                        }
+                    ],
+                    [
+                        {
+                            "text": "OpenAI API keys",
+                            "url": "https://platform.openai.com/api-keys",
+                        }
+                    ],
+                    [
+                        {
+                            "text": "Gemini API keys",
+                            "url": "https://aistudio.google.com/app/apikey",
+                        }
+                    ],
+                ]
+            },
+        )
+
+    async def _show_help(self, chat_id: int) -> None:
+        await self.client.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=(
+                "How to make a podcast\n"
+                "1. Send /start, choose PDF or script, and upload a PDF or TXT.\n"
+                "2. Open device settings or choose the in-chat setup.\n"
+                "3. Add a provider API key and start generation.\n\n"
+                "Commands: /pdf2podcast, /script2podcast, /devicesettings, "
+                "/keys, /usage, /cancel. Gemini TTS needs a Gemini key; "
+                "Edge TTS does not. Use /keys for official provider key pages."
+            ),
         )
 
     @staticmethod
@@ -553,13 +706,29 @@ class TelegramPodcastBot:
             if mode not in {"pdf", "script"}:
                 return
             session.mode = mode
-            session.stage = "upload_pdf" if mode == "pdf" else "upload_txt"
-            extension = "PDF" if mode == "pdf" else "TXT"
-            await self.client.call(
-                "sendMessage",
-                chat_id=chat_id,
-                text=f"Upload your {extension} file as a document attachment.",
-            )
+            if mode == "pdf":
+                await self._show_pdf_goals(session)
+            else:
+                await self._ask_for_upload(session)
+        elif data.startswith("pdfgoal:") and session.stage == "choose_pdf_goal":
+            goal = data.partition(":")[2]
+            if goal == "custom":
+                session.stage = "custom_task_prompt"
+                await self.client.call(
+                    "sendMessage",
+                    chat_id=chat_id,
+                    text=(
+                        "Send your custom instruction in one message "
+                        "(up to 2,000 characters). I’ll keep the explanation "
+                        "grounded in the uploaded PDF."
+                    ),
+                )
+            elif goal == "general":
+                session.task_guidance = ""
+                await self._ask_for_upload(session)
+            elif goal in PDF_TASK_GUIDANCE:
+                session.task_guidance = PDF_TASK_GUIDANCE[goal]
+                await self._ask_for_upload(session)
         elif data == "customize:no" and session.stage == "customize_choice":
             session.preferences = load_preferences(PREFERENCES_FILE)
             await self._show_generation_options(session)
@@ -1105,13 +1274,21 @@ class TelegramPodcastBot:
                 chat_id=session.chat_id,
                 text="Generating the podcast conversation script now.",
             )
+            suggestions = "\n\n".join(
+                prompt
+                for prompt in (
+                    session.task_guidance,
+                    session.preferences["suggestions"],
+                )
+                if prompt.strip()
+            )
             script_work = lambda: generate_script_file(
                 source_text,
                 script_path,
                 session.provider,
                 session.provider_key,
                 session.preferences["conversation_style"],
-                session.preferences["suggestions"],
+                suggestions,
                 session.model,
                 job_timeout,
             )
@@ -1159,10 +1336,30 @@ class TelegramPodcastBot:
                 )
             await self._send_audio_with_retries(session.chat_id, audio_path)
             delivered = True
+            try:
+                counts = await record_successful_delivery(
+                    session.user_id, session.username
+                )
+            except UsageStoreError as exc:
+                logger.error(
+                    "Audio was delivered but usage could not be recorded (%s).",
+                    type(exc).__name__,
+                )
+                delivery_message = (
+                    "Your podcast MP3 was delivered successfully, but the usage "
+                    "counter could not be saved."
+                )
+            else:
+                delivery_message = (
+                    "Your podcast MP3 was delivered successfully.\n"
+                    f"All users: {counts['total_successful_deliveries']} "
+                    "successful deliveries; you: "
+                    f"{counts['user_successful_deliveries']}."
+                )
             await self.client.call(
                 "sendMessage",
                 chat_id=session.chat_id,
-                text="Your podcast MP3 was delivered successfully.",
+                text=delivery_message,
             )
         except asyncio.CancelledError:
             try:

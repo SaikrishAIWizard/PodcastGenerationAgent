@@ -23,6 +23,7 @@ from ..settings import (
 )
 from ..telegram.client import ProviderValidationError, validate_provider_key
 from ..telegram.router import router as telegram_router
+from ..telegram.usage import UsageStoreError, get_usage
 from ..workflows.podcast import podcast_graph
 
 
@@ -40,6 +41,23 @@ jobs: dict[str, tuple[Path, Path]] = {}
 async def health_check() -> dict[str, str]:
     """Report that the service is responding to Render and uptime monitors."""
     return {"status": "ok"}
+
+
+@app.get("/usage")
+async def usage_totals() -> dict[str, int]:
+    """Return the global count of successfully delivered Telegram podcasts."""
+    try:
+        counts = await get_usage()
+        return {
+            "total_successful_deliveries": counts[
+                "total_successful_deliveries"
+            ]
+        }
+    except UsageStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Usage totals are temporarily unavailable.",
+        ) from exc
 
 
 class PodcastResponse(BaseModel):

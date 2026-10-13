@@ -8,6 +8,7 @@ from pathlib import Path
 class TelegramSession:
     user_id: int
     chat_id: int
+    username: str = ""
     stage: str = "choose_provider"
     provider: str = ""
     model: str = ""
@@ -15,6 +16,7 @@ class TelegramSession:
     provider_key: str = ""
     gemini_key: str = ""
     mode: str = ""
+    task_guidance: str = ""
     source_path: Path | None = None
     original_filename: str = ""
     temporary_directory: Path | None = None

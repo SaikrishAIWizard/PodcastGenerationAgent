@@ -49,6 +49,18 @@ async def register_webhook() -> None:
                 "description": "Create a podcast from a TXT script",
             },
             {
+                "command": "keys",
+                "description": "Get official provider API key links",
+            },
+            {
+                "command": "usage",
+                "description": "Show global and personal delivery totals",
+            },
+            {
+                "command": "help",
+                "description": "Show podcast setup and usage help",
+            },
+            {
                 "command": "start",
                 "description": "Show podcast options",
             },

@@ -75,9 +75,10 @@ python -m podcast_generator.telegram.set_webhook
 ```
 
 Webhook registration also installs the Telegram bot menu commands:
-`/devicesettings`, `/pdf2podcast`, and `/script2podcast`. Run the registration
-command again after updating the deployment to refresh the menu. `/start` and
-`/cancel` remain available as additional commands.
+`/devicesettings`, `/pdf2podcast`, `/script2podcast`, `/keys`, `/usage`, and
+`/help`. Run the registration command again after updating the deployment to
+refresh the menu. `/start` and `/cancel` remain available as additional
+commands.
 
 Transient Telegram HTTPS connection failures are retried up to five times with
 exponential backoff for Bot API calls and file downloads.
@@ -87,6 +88,13 @@ the configured Groq model for script generation and Gemini TTS with the
 configured `GEMINI_TTS_MODEL`. After the file is checked, open the settings
 Web App to use or edit device-local provider keys, model, TTS provider/model,
 and podcast preferences. `/settings` opens the same form at any time.
+
+For PDF podcasts, `/pdf2podcast` (or PDF from `/start`) first lets the user
+choose a general source-grounded podcast, exam preparation, research-paper
+explanation, job-interview preparation, concept learning, or a custom
+instruction of up to 2,000 characters. The selected guidance is combined with
+the existing source-grounded generation rules. `/script2podcast` keeps the
+TXT-script workflow unchanged.
 
 The Web App saves settings and API keys in Telegram SecureStorage on supported
 clients (encrypted at rest by the device's secure storage); they are
@@ -99,6 +107,16 @@ does not support SecureStorage, use **Configure in chat (fallback)** after the
 file is checked. In fallback mode keys are entered in chat, deleted where
 Telegram allows, and retained only in the active in-memory session. Gemini TTS
 requires a Gemini API key; Edge TTS does not.
+
+Use `/keys` or the links in the device settings page to open the official Groq,
+OpenAI, and Gemini API key pages. The bot cannot create provider keys for you.
+`/help` explains the setup flow, and `/usage` shows the all-user successful
+delivery total plus your personal count. A successful delivery is counted only
+after Telegram accepts the audio upload. Per-user counts and usernames are
+stored in `podcast_generator/telegram/usage.json`; that file is git-ignored.
+On Render's free service, runtime file changes are ephemeral and can be lost
+on restart or redeploy, so this count can reset. Persisting it across restarts
+requires a paid Render persistent disk or an external database.
 
 The webhook queues generation in an in-process background task and returns
 quickly. Sessions, credentials, duplicate-update tracking, and queued tasks are

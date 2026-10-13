@@ -23,6 +23,7 @@ from .client import (
     TelegramApiError,
     TelegramClient,
 )
+from .usage import UsageStoreError, get_usage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -157,6 +158,21 @@ async def telegram_webapp_defaults() -> dict[str, str]:
         "tts_model": os.environ.get("GEMINI_TTS_MODEL", "").strip()
         or "gemini-3.8-flash-tts"
     }
+
+
+@router.get("/telegram/webapp/usage")
+async def telegram_webapp_usage(request: Request) -> dict[str, int]:
+    """Return global and personal counts to an authenticated Telegram user."""
+    user_id = _telegram_webapp_user_id(
+        request.headers.get("X-Telegram-Init-Data", "")
+    )
+    try:
+        return await get_usage(user_id)
+    except UsageStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Usage totals are temporarily unavailable.",
+        ) from exc
 
 
 @router.post("/telegram/webapp/configure")

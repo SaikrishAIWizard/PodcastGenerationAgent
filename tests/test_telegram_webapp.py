@@ -52,6 +52,9 @@ class TelegramWebAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("localStorage", response.text)
+        self.assertIn("usage-counts", response.text)
+        self.assertIn("https://console.groq.com/keys", response.text)
+        self.assertIn("How to use the bot", response.text)
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_configure_requires_valid_telegram_signature(self):
@@ -84,6 +87,39 @@ class TelegramWebAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         bot.apply_webapp_configuration.assert_not_awaited()
+
+    def test_usage_requires_a_valid_telegram_signature(self):
+        with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test-token"}):
+            response = TestClient(app).get(
+                "/telegram/webapp/usage",
+                headers={"X-Telegram-Init-Data": "auth_date=1&hash=invalid"},
+            )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_usage_returns_only_the_signed_in_users_personal_count(self):
+        token = "test-token"
+        counts = {
+            "total_successful_deliveries": 12,
+            "user_successful_deliveries": 3,
+        }
+        with (
+            patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": token}),
+            patch(
+                "podcast_generator.telegram.router.get_usage",
+                new=AsyncMock(return_value=counts),
+            ) as get_usage,
+        ):
+            response = TestClient(app).get(
+                "/telegram/webapp/usage",
+                headers={
+                    "X-Telegram-Init-Data": signed_init_data(token, 123)
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), counts)
+        get_usage.assert_awaited_once_with(123)
 
     def test_configure_passes_validated_telegram_user_and_settings(self):
         token = "test-token"

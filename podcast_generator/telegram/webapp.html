@@ -43,6 +43,19 @@
       button { border: 0; background: var(--accent); color: #fff; font-weight: 700; }
       button.secondary { border: 1px solid var(--muted); background: var(--surface); color: var(--foreground); }
       .actions { display: grid; gap: 10px; margin-top: 4px; }
+      .panel { margin: 20px 0; padding: 16px; border-radius: 12px; background: var(--surface); }
+      .panel h2 { margin: 0 0 8px; font-size: 1.1rem; }
+      .provider-links { display: grid; gap: 8px; }
+      a.button-link {
+        display: block;
+        padding: 10px 12px;
+        border-radius: 9px;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 700;
+        text-align: center;
+        text-decoration: none;
+      }
       #status { min-height: 1.4em; color: var(--muted); }
       .warning { padding: 12px; border-radius: 9px; background: var(--surface); }
       [hidden] { display: none !important; }
@@ -52,6 +65,32 @@
     <h1>Podcast settings</h1>
     <p class="note">Choose your script provider, model, and voice provider. On supported Telegram apps, settings and API keys are stored in Telegram's encrypted device SecureStorage. They are sent securely to the bot only when you use them for a podcast; the bot keeps them in memory for that job and does not save them.</p>
     <p class="warning note">SecureStorage is device-specific and does not sync across phones or computers. If this Telegram app does not support SecureStorage, settings may be saved without keys; use the in-chat fallback for keys.</p>
+
+    <section class="panel" aria-labelledby="usage-heading">
+      <h2 id="usage-heading">Podcast deliveries</h2>
+      <p id="usage-counts" role="status" aria-live="polite">Loading usage totals…</p>
+    </section>
+
+    <section class="panel" aria-labelledby="provider-keys-heading">
+      <h2 id="provider-keys-heading">Get a provider API key</h2>
+      <p class="note">Create or manage keys on the provider’s official site. The bot cannot create keys on your behalf. Keep them private.</p>
+      <div class="provider-links">
+        <a class="button-link" href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Groq API keys</a>
+        <a class="button-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">OpenAI API keys</a>
+        <a class="button-link" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Gemini API keys</a>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="help-heading">
+      <h2 id="help-heading">How to use the bot</h2>
+      <ol>
+        <li>Send <code>/start</code> and choose PDF or script.</li>
+        <li>Upload a PDF or TXT file as a document.</li>
+        <li>Open settings or use the in-chat fallback to select a provider and add its API key.</li>
+        <li>Start generation. Gemini TTS requires a Gemini key; Edge TTS does not.</li>
+      </ol>
+      <p class="note">Use <code>/usage</code> in the bot to check delivery totals, or <code>/keys</code> for these official provider links.</p>
+    </section>
 
     <form id="settings">
       <label>Script provider
@@ -388,6 +427,19 @@
             fetch(apiUrl("providers")).then((response) => response.ok ? response.json() : Promise.reject()),
             fetch(apiUrl("telegram/webapp/defaults")).then((response) => response.ok ? response.json() : Promise.reject()),
           ]).catch(() => [null, null]);
+          try {
+            const usage = await fetch(apiUrl("telegram/webapp/usage"), {
+              headers: { "X-Telegram-Init-Data": telegram?.initData || "" },
+            });
+            if (!usage.ok) throw new Error("Usage totals unavailable");
+            const counts = await usage.json();
+            byId("usage-counts").textContent =
+              `All users: ${counts.total_successful_deliveries} successful deliveries. ` +
+              `Your deliveries: ${counts.user_successful_deliveries}.`;
+          } catch {
+            byId("usage-counts").textContent =
+              "Usage totals are available when opened from Telegram.";
+          }
           if (providers) {
             providerCatalog = providers;
           } else {
