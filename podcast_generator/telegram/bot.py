@@ -1300,11 +1300,17 @@ class TelegramPodcastBot:
                 ),
                 interval_seconds=45,
             )
+            await self.client.send_document(
+                session.chat_id,
+                script_path,
+                script_path.name,
+            )
+            script_path.unlink()
             await self.client.call(
                 "sendMessage",
                 chat_id=session.chat_id,
                 text=(
-                    "The script is ready. Generating podcast voices now"
+                    "The podcast script was sent. Generating podcast voices now"
                     + (" with Gemini TTS." if session.tts_provider == "gemini" else " with Edge TTS.")
                 ),
             )

@@ -40,6 +40,12 @@ class FakeTelegramClient(TelegramClient):
         self.calls.append(("sendAudio", {"chat_id": chat_id, "filename": filename}))
         return {}
 
+    async def send_document(self, chat_id, document_path, filename):
+        if not document_path.is_file():
+            raise AssertionError("Expected the generated script to exist.")
+        self.calls.append(("sendDocument", {"chat_id": chat_id, "filename": filename}))
+        return {}
+
 
 def private_message(user_id, chat_id, message_id, **payload):
     return {
@@ -416,12 +422,15 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
                 Path(path).write_text("HOST: Hello", encoding="utf-8")
 
             def generate_audio(_script, path, *_args, **_kwargs):
+                self.assertFalse(_script.exists())
                 Path(path).write_bytes(b"mp3")
 
             async def record_after_send(user_id, username):
                 self.assertTrue(
                     any(method == "sendAudio" for method, _ in self.client.calls)
                 )
+                methods = [method for method, _ in self.client.calls]
+                self.assertLess(methods.index("sendDocument"), methods.index("sendAudio"))
                 return {
                     "total_successful_deliveries": 1,
                     "user_successful_deliveries": 1,

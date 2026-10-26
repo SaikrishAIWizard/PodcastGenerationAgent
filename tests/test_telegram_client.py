@@ -56,6 +56,27 @@ class TelegramClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.status_code, 503)
         self.assertIsInstance(raised.exception.__cause__, httpx.ConnectError)
 
+    async def test_send_document_uploads_markdown_file(self):
+        def respond(request):
+            self.assertEqual(request.url.path, "/bottest-token/sendDocument")
+            body = request.read().decode()
+            self.assertIn('name="chat_id"\r\n\r\n123', body)
+            self.assertIn('name="document"; filename="script.md"', body)
+            self.assertIn("text/markdown", body)
+            self.assertIn("HOST: Hello", body)
+            return httpx.Response(
+                200,
+                json={"ok": True, "result": {"message_id": 1}},
+            )
+
+        client = TelegramClient("test-token", transport=httpx.MockTransport(respond))
+        with tempfile.TemporaryDirectory() as folder:
+            document = Path(folder) / "script.md"
+            document.write_text("HOST: Hello", encoding="utf-8")
+            result = await client.send_document(123, document, document.name)
+
+        self.assertEqual(result, {"message_id": 1})
+
     async def test_download_retries_temporary_connection_errors(self):
         attempts = 0
 

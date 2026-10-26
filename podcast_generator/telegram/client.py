@@ -133,6 +133,50 @@ class TelegramClient:
         result = payload.get("result")
         return result if isinstance(result, dict) else {}
 
+    async def send_document(
+        self, chat_id: int, document_path: Path, filename: str
+    ) -> dict[str, Any]:
+        async def send(client: httpx.AsyncClient) -> httpx.Response:
+            with document_path.open("rb") as document_file:
+                return await client.post(
+                    self._api_url("sendDocument"),
+                    data={"chat_id": str(chat_id)},
+                    files={
+                        "document": (
+                            filename,
+                            document_file,
+                            "text/markdown",
+                        )
+                    },
+                )
+
+        try:
+            response = await self._post_with_retries("sendDocument", send)
+        except OSError as exc:
+            raise TelegramApiError("sendDocument", 500) from exc
+
+        payload: dict[str, Any] = {}
+        try:
+            decoded = response.json()
+            if isinstance(decoded, dict):
+                payload = decoded
+        except ValueError:
+            pass
+        if response.is_error or payload.get("ok") is not True:
+            parameters = payload.get("parameters")
+            retry_after = (
+                parameters.get("retry_after", 0)
+                if isinstance(parameters, dict)
+                else 0
+            )
+            raise TelegramApiError(
+                "sendDocument",
+                response.status_code,
+                float(retry_after) if isinstance(retry_after, (int, float)) else 0,
+            )
+        result = payload.get("result")
+        return result if isinstance(result, dict) else {}
+
     async def download_file(
         self, file_path: str, destination: Path, max_bytes: int
     ) -> int:

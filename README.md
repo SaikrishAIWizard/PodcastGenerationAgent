@@ -21,6 +21,8 @@ For each `POST /podcasts` request, provide your own `api_key` as multipart form
 data. The service validates the key and holds it only for that request; it does
 not use a server-side LLM key. For Gemini TTS, provide `gemini_api_key` as well,
 unless the selected LLM provider is Gemini, in which case the same key is used.
+Long PDF text is split into bounded sections for script generation; the sections
+are combined into one dialogue script before audio synthesis.
 `GET /providers` lists available providers, each provider's default model, and
 the selectable model IDs. Select one by sending it as `model`, or enter a
 custom model ID. Configure defaults with `GROQ_MODEL`, `OPENAI_MODEL`, and

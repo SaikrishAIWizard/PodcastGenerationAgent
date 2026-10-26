@@ -214,7 +214,6 @@ def synthesize_gemini(
             "response_format": {"type": "audio"},
             "generation_config": {
                 "speech_config": {
-                    "mode": "conversational",
                     "speakers": [
                         {"speaker": speaker, "voice": voices[speaker]}
                         for speaker in speakers
