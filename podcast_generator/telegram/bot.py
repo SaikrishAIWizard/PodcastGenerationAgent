@@ -1305,7 +1305,6 @@ class TelegramPodcastBot:
                 script_path,
                 script_path.name,
             )
-            script_path.unlink()
             await self.client.call(
                 "sendMessage",
                 chat_id=session.chat_id,
