@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Podcast Generation Agent",
+    "locale": "en",
+    "output": ".archify/architecture-podcast-generation-20261106-210500/podcast-generation-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/SaikrishAIWizard/PodcastGenerationAgent.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "87337ccab56f4ac0f3c10fdc84f2317338145fcf"
+    }
+  },
+  "components": [
+    {
+      "id": "api_clients",
+      "type": "external",
+      "label": "API Clients",
+      "sublabel": "PDF uploads + options",
+      "pos": [35, 185],
+      "size": [145, 62]
+    },
+    {
+      "id": "telegram_users",
+      "type": "external",
+      "label": "Telegram Users",
+      "sublabel": "chat + settings",
+      "pos": [35, 495],
+      "size": [145, 62]
+    },
+    {
+      "id": "telegram_api",
+      "type": "external",
+      "label": "Telegram Bot API",
+      "sublabel": "webhook + files + messages",
+      "pos": [220, 495],
+      "size": [150, 68]
+    },
+    {
+      "id": "llm_providers",
+      "type": "external",
+      "label": "LLM Providers",
+      "sublabel": "Groq / Gemini / OpenAI",
+      "pos": [980, 35],
+      "size": [175, 66]
+    },
+    {
+      "id": "speech_providers",
+      "type": "external",
+      "label": "Speech Providers",
+      "sublabel": "Gemini TTS / Edge TTS",
+      "pos": [1270, 35],
+      "size": [175, 66]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "FastAPI App",
+      "sublabel": "REST + Telegram routes",
+      "pos": [400, 180],
+      "size": [165, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/api/main.py",
+          "line": 30,
+          "end_line": 36
+        },
+        {
+          "path": "podcast_generator/api/main.py",
+          "line": 78,
+          "end_line": 95
+        },
+        {
+          "path": "podcast_generator/api/main.py",
+          "line": 141,
+          "end_line": 165
+        }
+      ]
+    },
+    {
+      "id": "workflow",
+      "type": "backend",
+      "label": "LangGraph Workflow",
+      "sublabel": "script then audio",
+      "pos": [700, 180],
+      "size": [170, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/workflows/podcast.py",
+          "line": 30,
+          "end_line": 64
+        },
+        {
+          "path": "podcast_generator/workflows/podcast.py",
+          "line": 67,
+          "end_line": 75
+        }
+      ]
+    },
+    {
+      "id": "script_generation",
+      "type": "backend",
+      "label": "Script Generation",
+      "sublabel": "PDF text → DSPy dialogue",
+      "pos": [980, 180],
+      "size": [175, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/tools/podcast.py",
+          "line": 16,
+          "end_line": 64
+        },
+        {
+          "path": "podcast_generator/services/scripts.py",
+          "line": 55,
+          "end_line": 84
+        },
+        {
+          "path": "podcast_generator/services/scripts.py",
+          "line": 124,
+          "end_line": 181
+        }
+      ]
+    },
+    {
+      "id": "audio_conversion",
+      "type": "backend",
+      "label": "Audio Conversion",
+      "sublabel": "Gemini / Edge TTS + FFmpeg",
+      "pos": [1270, 180],
+      "size": [175, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/tools/podcast.py",
+          "line": 67,
+          "end_line": 95
+        },
+        {
+          "path": "podcast_generator/services/audio.py",
+          "line": 321,
+          "end_line": 375
+        },
+        {
+          "path": "podcast_generator/services/audio.py",
+          "line": 404,
+          "end_line": 467
+        }
+      ]
+    },
+    {
+      "id": "telegram_bot",
+      "type": "backend",
+      "label": "Telegram Integration",
+      "sublabel": "webhook, sessions, delivery",
+      "pos": [400, 420],
+      "size": [180, 78],
+      "sources": [
+        {
+          "path": "podcast_generator/telegram/router.py",
+          "line": 105,
+          "end_line": 134
+        },
+        {
+          "path": "podcast_generator/telegram/router.py",
+          "line": 178,
+          "end_line": 214
+        },
+        {
+          "path": "podcast_generator/telegram/bot.py",
+          "line": 1247,
+          "end_line": 1346
+        }
+      ]
+    },
+    {
+      "id": "process_state",
+      "type": "backend",
+      "label": "Process-Local State",
+      "sublabel": "job paths + chat sessions",
+      "pos": [720, 420],
+      "size": [180, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/api/main.py",
+          "line": 36,
+          "end_line": 36
+        },
+        {
+          "path": "podcast_generator/telegram/bot.py",
+          "line": 71,
+          "end_line": 82
+        }
+      ]
+    },
+    {
+      "id": "local_files",
+      "type": "database",
+      "label": "Local Files",
+      "sublabel": "uploads, scripts, MP3s",
+      "pos": [990, 420],
+      "size": [165, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/api/main.py",
+          "line": 126,
+          "end_line": 139
+        },
+        {
+          "path": "podcast_generator/tools/podcast.py",
+          "line": 61,
+          "end_line": 64
+        },
+        {
+          "path": "podcast_generator/services/audio.py",
+          "line": 396,
+          "end_line": 467
+        }
+      ]
+    },
+    {
+      "id": "usage_json",
+      "type": "database",
+      "label": "Usage JSON",
+      "sublabel": "confirmed Telegram deliveries",
+      "pos": [400, 680],
+      "size": [185, 72],
+      "sources": [
+        {
+          "path": "podcast_generator/telegram/usage.py",
+          "line": 11,
+          "end_line": 12
+        },
+        {
+          "path": "podcast_generator/telegram/usage.py",
+          "line": 84,
+          "end_line": 99
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Configured Render Docker Web Service · one Uvicorn worker",
+      "wraps": [
+        "fastapi",
+        "workflow",
+        "script_generation",
+        "audio_conversion",
+        "telegram_bot",
+        "process_state",
+        "local_files",
+        "usage_json"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "rest-upload",
+      "from": "api_clients",
+      "to": "fastapi",
+      "label": "POST /podcasts · PDF + provider options",
+      "variant": "emphasis"
+    },
+    {
+      "id": "chat-user",
+      "from": "telegram_users",
+      "to": "telegram_api",
+      "label": "chat + document"
+    },
+    {
+      "id": "webhook",
+      "from": "telegram_api",
+      "to": "fastapi",
+      "label": "webhook · secret checked",
+      "variant": "security"
+    },
+    {
+      "id": "api-workflow",
+      "from": "fastapi",
+      "to": "workflow",
+      "label": "invoke in thread pool"
+    },
+    {
+      "id": "webhook-dispatch",
+      "from": "fastapi",
+      "to": "telegram_bot",
+      "label": "schedule update task"
+    },
+    {
+      "id": "workflow-script",
+      "from": "workflow",
+      "to": "script_generation",
+      "label": "script node"
+    },
+    {
+      "id": "script-audio",
+      "from": "script_generation",
+      "to": "audio_conversion",
+      "label": "saved dialogue"
+    },
+    {
+      "id": "script-llm",
+      "from": "script_generation",
+      "to": "llm_providers",
+      "label": "selected model request"
+    },
+    {
+      "id": "audio-tts",
+      "from": "audio_conversion",
+      "to": "speech_providers",
+      "label": "Gemini or Edge synthesis"
+    },
+    {
+      "id": "fastapi-jobs",
+      "from": "fastapi",
+      "to": "process_state",
+      "label": "job ID → file paths"
+    },
+    {
+      "id": "bot-sessions",
+      "from": "telegram_bot",
+      "to": "process_state",
+      "label": "sessions + active tasks"
+    },
+    {
+      "id": "api-files",
+      "from": "fastapi",
+      "to": "local_files",
+      "label": "stage upload / serve outputs"
+    },
+    {
+      "id": "script-file",
+      "from": "script_generation",
+      "to": "local_files",
+      "label": "write Markdown"
+    },
+    {
+      "id": "audio-file",
+      "from": "audio_conversion",
+      "to": "local_files",
+      "label": "write MP3"
+    },
+    {
+      "id": "bot-script",
+      "from": "telegram_bot",
+      "to": "script_generation",
+      "label": "direct script helper"
+    },
+    {
+      "id": "bot-audio",
+      "from": "telegram_bot",
+      "to": "audio_conversion",
+      "label": "direct audio helper"
+    },
+    {
+      "id": "bot-api",
+      "from": "telegram_bot",
+      "to": "telegram_api",
+      "label": "getFile / sendDocument / sendAudio"
+    },
+    {
+      "id": "bot-usage",
+      "from": "telegram_bot",
+      "to": "usage_json",
+      "label": "record after audio accepted"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two Generation Paths",
+      "items": [
+        "REST requests run the LangGraph script → audio workflow.",
+        "Telegram webhooks schedule in-process tasks and call the shared generation helpers directly.",
+        "The webhook task runs in the app process; no external job queue is configured."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "State and Storage",
+      "items": [
+        "REST job IDs and Telegram sessions are held in process memory.",
+        "Uploads and generated files use the local filesystem; Telegram usage totals use a local JSON file.",
+        "The Render configuration runs one Uvicorn worker; no external database or object store is shown."
+      ]
+    }
+  ]
+}

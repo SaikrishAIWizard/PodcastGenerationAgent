@@ -36,7 +36,6 @@ class TelegramWebAppConfiguration(BaseModel):
 
     provider: str = Field(min_length=1, max_length=32)
     model: str = Field(min_length=1, max_length=200)
-    tts_provider: str = Field(min_length=1, max_length=16)
     tts_model: str = Field(default="", max_length=200)
     api_key: str = Field(min_length=1, max_length=4096)
     gemini_api_key: str = Field(default="", max_length=4096)

@@ -63,7 +63,7 @@
   </head>
   <body>
     <h1>Podcast settings</h1>
-    <p class="note">Choose your script provider, model, and voice provider. On supported Telegram apps, settings and API keys are stored in Telegram's encrypted device SecureStorage. They are sent securely to the bot only when you use them for a podcast; the bot keeps them in memory for that job and does not save them.</p>
+    <p class="note">Choose your script provider and model. Podcast voices are generated only with Google Gemini TTS. On supported Telegram apps, settings and API keys are stored in Telegram's encrypted device SecureStorage. They are sent securely to the bot only when you use them for a podcast; the bot keeps them in memory for that job and does not save them.</p>
     <p class="warning note">SecureStorage is device-specific and does not sync across phones or computers. If this Telegram app does not support SecureStorage, settings may be saved without keys; use the in-chat fallback for keys.</p>
 
     <section class="panel" aria-labelledby="usage-heading">
@@ -87,7 +87,7 @@
         <li>Send <code>/start</code> and choose PDF or script.</li>
         <li>Upload a PDF or TXT file as a document.</li>
         <li>Open settings or use the in-chat fallback to select a provider and add its API key.</li>
-        <li>Start generation. Gemini TTS requires a Gemini key; Edge TTS does not.</li>
+        <li>Start generation. Google Gemini TTS requires a Gemini API key; when Gemini is your script provider, the same key is used for both.</li>
       </ol>
       <p class="note">Use <code>/usage</code> in the bot to check delivery totals, or <code>/keys</code> for these official provider links.</p>
     </section>
@@ -109,16 +109,10 @@
       <label>Script provider API key
         <input id="script-key" type="password" autocomplete="off" autocapitalize="off">
       </label>
-      <label id="gemini-key-label">Gemini API key for Gemini TTS
+      <label id="gemini-key-label">Google Gemini API key for podcast voices
         <input id="gemini-key" type="password" autocomplete="off" autocapitalize="off">
       </label>
-      <label>Voice provider
-        <select id="tts-provider">
-          <option value="gemini">Gemini TTS (default)</option>
-          <option value="edge">Edge TTS (no Gemini key required)</option>
-        </select>
-      </label>
-      <label id="tts-model-label">Gemini TTS model
+      <label>Google Gemini TTS model
         <input id="tts-model" maxlength="200" autocomplete="off">
       </label>
       <label>Conversation style (optional)
@@ -170,7 +164,6 @@
         let saved = {
           provider: "groq",
           model: "",
-          tts_provider: "gemini",
           tts_model: "",
           keys: {},
           preferences: {},
@@ -234,7 +227,6 @@
           return {
             provider,
             model: selectedModel(),
-            tts_provider: byId("tts-provider").value,
             tts_model: byId("tts-model").value.trim(),
             keys,
             preferences: {
@@ -295,8 +287,8 @@
             status("Enter an API key for the selected script provider.");
             return;
           }
-          if (saved.tts_provider === "gemini" && !saved.keys.gemini) {
-            status("Gemini TTS needs a Gemini API key. Add it or select Edge TTS.");
+          if (!saved.keys.gemini) {
+            status("Google Gemini TTS needs a Gemini API key. Enter one to continue.");
             return;
           }
           byId("use-job").disabled = true;
@@ -311,7 +303,6 @@
               body: JSON.stringify({
                 provider: saved.provider,
                 model: saved.model,
-                tts_provider: saved.tts_provider,
                 tts_model: saved.tts_model,
                 api_key: apiKey,
                 gemini_api_key: saved.keys.gemini || "",
@@ -335,9 +326,6 @@
         byId("provider").addEventListener("change", () => {
           saved.keys[saved.provider] = byId("script-key").value.trim();
           renderModels("");
-        });
-        byId("tts-provider").addEventListener("change", () => {
-          byId("tts-model-label").hidden = byId("tts-provider").value !== "gemini";
         });
         byId("model").addEventListener("change", () => {
           byId("custom-model-label").hidden = byId("model").value !== "__custom__";
@@ -368,14 +356,11 @@
             saved = {
               provider: "groq",
               model: "",
-              tts_provider: "gemini",
               tts_model: "",
               keys: {},
               preferences: {},
             };
             byId("provider").value = "groq";
-            byId("tts-provider").value = "gemini";
-            byId("tts-model-label").hidden = false;
             byId("script-key").value = "";
             byId("gemini-key").value = "";
             byId("conversation-style").value = "";
@@ -415,8 +400,6 @@
           byId("provider").value = ["groq", "gemini", "openai"].includes(saved.provider)
             ? saved.provider
             : "groq";
-          byId("tts-provider").value = saved.tts_provider === "edge" ? "edge" : "gemini";
-          byId("tts-model-label").hidden = byId("tts-provider").value !== "gemini";
           byId("tts-model").value = saved.tts_model || "";
           byId("conversation-style").value = saved.preferences?.conversation_style || "";
           byId("speaker-1-voice").value = saved.preferences?.speaker_1_voice || "";

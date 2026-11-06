@@ -45,18 +45,12 @@ def read_source_text(path: Path) -> str:
     return text
 
 
-def estimate_generation_seconds(
-    input_characters: int, tts_provider: str
-) -> int:
-    """Estimate processing time from input length and TTS chunk throughput."""
+def estimate_generation_seconds(input_characters: int) -> int:
+    """Estimate processing time for the fixed Gemini TTS Telegram path."""
     script_chunks = max(1, math.ceil(input_characters / 12_000))
     estimated_script_characters = max(input_characters, input_characters * 2)
-    if tts_provider == "gemini":
-        tts_chunks = max(1, math.ceil(estimated_script_characters / 12_000))
-        tts_seconds = tts_chunks * 25
-    else:
-        tts_chunks = max(1, math.ceil(estimated_script_characters / 2_500))
-        tts_seconds = tts_chunks * 12
+    tts_chunks = max(1, math.ceil(estimated_script_characters / 12_000))
+    tts_seconds = tts_chunks * 25
     return max(45, 20 + script_chunks * 12 + tts_seconds)
 
 
@@ -121,7 +115,6 @@ def generate_script_file(
 def generate_audio_file(
     script_path: Path,
     destination: Path,
-    tts_provider: str,
     gemini_api_key: str,
     speaker_1_voice: str,
     speaker_2_voice: str,
@@ -132,7 +125,7 @@ def generate_audio_file(
     return audio.convert_to_mp3(
         script_path,
         destination,
-        tts_provider=tts_provider,
+        tts_provider="gemini",
         tts_model=tts_model.strip()
         or os.environ.get("GEMINI_TTS_MODEL", "").strip()
         or "gemini-3.8-flash-tts",

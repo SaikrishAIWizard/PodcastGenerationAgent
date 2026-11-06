@@ -29,4 +29,3 @@ class TelegramSession:
             "suggestions": "",
         }
     )
-    tts_provider: str = ""

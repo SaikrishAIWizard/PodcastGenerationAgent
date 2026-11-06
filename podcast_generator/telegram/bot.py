@@ -260,7 +260,7 @@ class TelegramPodcastBot:
             await self._send_start_hint(chat_id)
             return
 
-        if session.stage in {"provider_key", "gemini_key", "gemini_tts_key"}:
+        if session.stage in {"provider_key", "gemini_key"}:
             if not isinstance(text, str):
                 await self.client.call(
                     "sendMessage",
@@ -384,7 +384,6 @@ class TelegramPodcastBot:
             stage="choose_mode",
             provider="groq",
             model=provider_models("groq")[0],
-            tts_provider="gemini",
         )
         self.sessions[user_id] = session
         self._session_updated[user_id] = time.monotonic()
@@ -393,7 +392,7 @@ class TelegramPodcastBot:
             chat_id=chat_id,
             text=(
                 "Welcome to Podcast Generator! Quick start uses Groq for the "
-                "script and Gemini for voices. Choose a file type; you can "
+                "script and Google Gemini TTS for voices. Choose a file type; you can "
                 "change provider, model, voice, and saved device settings with "
                 "/settings."
             ),
@@ -459,7 +458,7 @@ class TelegramPodcastBot:
         if webapp_url:
             text = (
                 "Ready to generate. Use your device-saved provider, model, "
-                "Gemini TTS choice, and API keys. Edit those settings with "
+                "Google Gemini TTS model and API keys. Edit those settings with "
                 "/settings. Keys are sent only for this job and kept in memory."
             )
         else:
@@ -555,8 +554,8 @@ class TelegramPodcastBot:
                 "2. Open device settings or choose the in-chat setup.\n"
                 "3. Add a provider API key and start generation.\n\n"
                 "Commands: /pdf2podcast, /script2podcast, /devicesettings, "
-                "/keys, /usage, /cancel. Gemini TTS needs a Gemini key; "
-                "Edge TTS does not. Use /keys for official provider key pages."
+                "/keys, /usage, /cancel. Google Gemini TTS requires a Gemini "
+                "API key. Use /keys for official provider key pages."
             ),
         )
 
@@ -695,13 +694,7 @@ class TelegramPodcastBot:
             elif choice.isdigit() and int(choice) < len(models):
                 session.model = models[int(choice)]
                 await self._after_model_selection(session)
-        elif data == "gemini:skip" and session.stage == "gemini_key":
-            if session.source_path is not None:
-                session.tts_provider = "edge"
-                await self._show_tts_options(session)
-            else:
-                await self._show_modes(session)
-        elif data.startswith("mode:") and session.stage == "choose_mode":
+        if data.startswith("mode:") and session.stage == "choose_mode":
             mode = data.partition(":")[2]
             if mode not in {"pdf", "script"}:
                 return
@@ -748,33 +741,6 @@ class TelegramPodcastBot:
             field = data.partition(":")[2]
             if session.stage == field:
                 await self._advance_preference(session, field, "")
-        elif data == "tts:edge" and session.stage == "choose_tts":
-            session.tts_provider = "edge"
-            if session.source_path is not None:
-                await self._start_generation(session)
-            else:
-                await self._show_modes(session)
-        elif data == "tts:gemini" and session.stage == "choose_tts":
-            if session.gemini_key:
-                session.tts_provider = "gemini"
-                if session.source_path is not None:
-                    await self._start_generation(session)
-                else:
-                    await self._show_modes(session)
-            else:
-                session.stage = "gemini_tts_key"
-                await self.client.call(
-                    "sendMessage",
-                    chat_id=chat_id,
-                    text=(
-                        "Send your Gemini API key to use Gemini TTS, or choose "
-                        "Edge TTS instead. The key will be kept only for this session."
-                    ),
-                    reply_markup=self._keyboard([("Use Edge TTS", "tts:edge")]),
-                )
-        elif data == "tts:edge" and session.stage == "gemini_tts_key":
-            session.tts_provider = "edge"
-            await self._start_generation(session)
 
     async def _handle_key_message(
         self, session: TelegramSession, message: dict[str, Any], raw_key: str
@@ -800,18 +766,13 @@ class TelegramPodcastBot:
                 )
                 return
             elif session.stage == "gemini_key":
-                if session.source_path is not None:
-                    session.tts_provider = "edge"
-                    await self._show_tts_options(session)
-                else:
-                    await self._show_modes(session)
-                return
-            else:
                 await self.client.call(
                     "sendMessage",
                     chat_id=session.chat_id,
-                    text="Gemini TTS needs a Gemini key. Send it or switch to Edge TTS.",
-                    reply_markup=self._keyboard([("Use Edge TTS", "tts:edge")]),
+                    text=(
+                        "A Gemini API key is required for Google Gemini TTS. "
+                        "Send your key to continue."
+                    ),
                 )
                 return
 
@@ -835,12 +796,9 @@ class TelegramPodcastBot:
             await self._show_model_options(session)
         elif session.stage == "gemini_key":
             if session.source_path is not None:
-                await self._show_tts_options(session)
+                await self._start_generation(session)
             else:
                 await self._show_modes(session)
-        elif session.stage == "gemini_tts_key":
-            session.tts_provider = "gemini"
-            await self._start_generation(session)
 
     async def _delete_sensitive_message(
         self, chat_id: int, message: dict[str, Any]
@@ -874,7 +832,7 @@ class TelegramPodcastBot:
             chat_id=session.chat_id,
             text=(
                 "Choose how to create your podcast. Quick start uses Groq for "
-                "the script and Gemini TTS for voices."
+                "the script and Google Gemini TTS for voices."
             ),
             reply_markup={"inline_keyboard": rows},
         )
@@ -905,7 +863,7 @@ class TelegramPodcastBot:
         if session.provider == "gemini":
             session.gemini_key = session.provider_key
             if session.source_path is not None:
-                await self._show_tts_options(session)
+                await self._start_generation(session)
             else:
                 await self._show_modes(session)
             return
@@ -914,10 +872,10 @@ class TelegramPodcastBot:
             "sendMessage",
             chat_id=session.chat_id,
             text=(
-                "A Gemini API key is optional unless you choose Gemini TTS. "
-                "Send your own Gemini key now, or continue without it."
+                "Send your Google Gemini API key for podcast voice generation. "
+                "The script provider can be different; this key is required for "
+                "Google Gemini TTS and is kept only for this active session."
             ),
-            reply_markup=self._keyboard([("Continue without Gemini", "gemini:skip")]),
         )
 
     async def _begin_file_processing(
@@ -1101,30 +1059,13 @@ class TelegramPodcastBot:
             reply_markup=self._keyboard([("Skip", f"prefskip:{next_field}")]),
         )
 
-    async def _show_tts_options(self, session: TelegramSession) -> None:
-        session.stage = "choose_tts"
-        await self.client.call(
-            "sendMessage",
-            chat_id=session.chat_id,
-            text=(
-                "Choose voice generation. Gemini TTS is recommended when you "
-                "have a Gemini API key. Edge TTS is the fallback and may take "
-                "longer, depending on script length and network conditions."
-            ),
-            reply_markup=self._keyboard(
-                [("Gemini TTS", "tts:gemini")],
-                [("Edge TTS", "tts:edge")],
-            ),
-        )
-
     async def _start_generation(self, session: TelegramSession) -> None:
-        if session.tts_provider == "gemini" and not session.gemini_key:
-            session.stage = "gemini_tts_key"
+        if not session.gemini_key:
+            session.stage = "gemini_key"
             await self.client.call(
                 "sendMessage",
                 chat_id=session.chat_id,
-                text="A valid Gemini API key is required for Gemini TTS.",
-                reply_markup=self._keyboard([("Use Edge TTS", "tts:edge")]),
+                text="A valid Gemini API key is required for Google Gemini TTS.",
             )
             return
         if session.source_path is None or session.temporary_directory is None:
@@ -1135,9 +1076,7 @@ class TelegramPodcastBot:
             )
             return
 
-        estimate = estimate_generation_seconds(
-            session.input_characters, session.tts_provider
-        )
+        estimate = estimate_generation_seconds(session.input_characters)
         estimate_text = (
             f"{max(1, round(estimate / 60))} minute(s)"
             if estimate >= 60
@@ -1173,13 +1112,12 @@ class TelegramPodcastBot:
 
             provider = configuration.get("provider")
             model = configuration.get("model")
-            tts_provider = configuration.get("tts_provider")
             tts_model = configuration.get("tts_model", "")
             api_key = configuration.get("api_key")
             gemini_key = configuration.get("gemini_api_key", "")
             preferences = configuration.get("preferences", {})
-            if provider not in PROVIDERS or tts_provider not in {"gemini", "edge"}:
-                raise ValueError("Choose a supported provider and voice option.")
+            if provider not in PROVIDERS:
+                raise ValueError("Choose a supported script provider.")
             if (
                 not isinstance(model, str)
                 or not model.strip()
@@ -1225,20 +1163,18 @@ class TelegramPodcastBot:
             await validate_provider_key(provider, api_key)
             if provider == "gemini":
                 gemini_key = gemini_key or api_key
-            if tts_provider == "gemini":
-                if not gemini_key:
-                    raise ValueError(
-                        "A Gemini API key is required for Gemini TTS. Add one or select Edge TTS."
-                    )
-                if provider != "gemini" or gemini_key != api_key:
-                    await validate_provider_key("gemini", gemini_key)
+            if not gemini_key:
+                raise ValueError(
+                    "A Gemini API key is required for Google Gemini TTS."
+                )
+            if provider != "gemini" or gemini_key != api_key:
+                await validate_provider_key("gemini", gemini_key)
 
             session.provider = provider
             session.model = model.strip()
             session.tts_model = tts_model.strip()
             session.provider_key = api_key
             session.gemini_key = gemini_key
-            session.tts_provider = tts_provider
             for field, value in preferences.items():
                 if value.strip():
                     session.preferences[field] = value.strip()
@@ -1305,18 +1241,18 @@ class TelegramPodcastBot:
                 script_path,
                 script_path.name,
             )
+            script_path.unlink()
             await self.client.call(
                 "sendMessage",
                 chat_id=session.chat_id,
                 text=(
-                    "The podcast script was sent. Generating podcast voices now"
-                    + (" with Gemini TTS." if session.tts_provider == "gemini" else " with Edge TTS.")
+                    "The podcast script was sent. Generating voices with "
+                    "Google Gemini TTS now."
                 ),
             )
             audio_work = lambda: generate_audio_file(
                 script_path,
                 audio_path,
-                session.tts_provider,
                 session.gemini_key,
                 session.preferences["speaker_1_voice"],
                 session.preferences["speaker_2_voice"],

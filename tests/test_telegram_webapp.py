@@ -55,6 +55,9 @@ class TelegramWebAppTests(unittest.TestCase):
         self.assertIn("usage-counts", response.text)
         self.assertIn("https://console.groq.com/keys", response.text)
         self.assertIn("How to use the bot", response.text)
+        self.assertIn("Google Gemini TTS", response.text)
+        self.assertNotIn("Edge TTS", response.text)
+        self.assertNotIn('id="tts-provider"', response.text)
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_configure_requires_valid_telegram_signature(self):
@@ -128,7 +131,6 @@ class TelegramWebAppTests(unittest.TestCase):
         config = {
             "provider": "groq",
             "model": "llama-3.3-70b-versatile",
-            "tts_provider": "gemini",
             "tts_model": "gemini-3.8-flash-tts",
             "api_key": "groq-key",
             "gemini_api_key": "gemini-key",
@@ -163,7 +165,6 @@ class TelegramWebAppBotTests(unittest.IsolatedAsyncioTestCase):
             configuration = {
                 "provider": "groq",
                 "model": "groq-custom",
-                "tts_provider": "gemini",
                 "tts_model": "gemini-custom-tts",
                 "api_key": "groq-secret",
                 "gemini_api_key": "gemini-secret",
@@ -187,7 +188,6 @@ class TelegramWebAppBotTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(session.provider, "groq")
         self.assertEqual(session.model, "groq-custom")
-        self.assertEqual(session.tts_provider, "gemini")
         self.assertEqual(session.tts_model, "gemini-custom-tts")
         self.assertEqual(session.provider_key, "groq-secret")
         self.assertEqual(session.gemini_key, "gemini-secret")
@@ -203,10 +203,38 @@ class TelegramWebAppBotTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "provider": "groq",
                     "model": "groq-custom",
-                    "tts_provider": "edge",
                     "api_key": "groq-secret",
                 },
             )
+
+    async def test_device_configuration_requires_gemini_tts_key(self):
+        bot = TelegramPodcastBot(TelegramClient("unused"))
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.txt"
+            source.write_text("source")
+            bot.sessions[123] = TelegramSession(
+                user_id=123,
+                chat_id=123,
+                stage="configure",
+                source_path=source,
+            )
+            with (
+                patch(
+                    "podcast_generator.telegram.bot.validate_provider_key",
+                    new=AsyncMock(return_value=None),
+                ) as validate,
+                self.assertRaisesRegex(ValueError, "Gemini API key is required"),
+            ):
+                await bot.apply_webapp_configuration(
+                    123,
+                    {
+                        "provider": "groq",
+                        "model": "groq-model",
+                        "api_key": "groq-secret",
+                    },
+                )
+
+        validate.assert_awaited_once_with("groq", "groq-secret")
 
 
 if __name__ == "__main__":

@@ -1,131 +1,171 @@
 # Podcast Generation Agent
 
-Generate source-grounded two-speaker podcasts from PDFs or text files with
-FastAPI, LangGraph, DSPy, and Edge or Gemini text-to-speech.
+Turn a PDF or text source into a source-grounded, two-speaker podcast script
+and an MP3. The project includes a FastAPI service, a command-line generator,
+and a Telegram bot.
 
-## Setup
+> **Telegram voice provider:** Telegram always uses Google Gemini TTS and
+> requires a Gemini API key. The REST API and command-line interface continue
+> to offer both Gemini TTS and Edge TTS.
 
-1. Create and activate a virtual environment.
-2. Install the project with `python -m pip install -r requirements.txt`.
-3. Copy `.env.example` to `.env` and configure default model IDs, optional model
-   lists, and Telegram settings. Never commit `.env`.
-4. Ensure FFmpeg is installed and available on `PATH`.
+## What it does
 
-python -m podcast_generator.telegram.set_webhook
-ngrok http 8000
-Run the command-line generator with `python -m podcast_generator --help`.
-Run the HTTP API with `uvicorn podcast_generator.api.main:app --host 0.0.0.0 --port 8000`.
-Its interactive API documentation is available at `/docs`.
+- Extracts text from digital PDFs or UTF-8 text files.
+- Generates a conversational `HOST` / `EXPERT` script with a selected LLM
+  provider (Groq, Gemini, or OpenAI).
+- Splits long documents into sections and carries covered topics and recent
+  dialogue forward to reduce repeated introductions and improve continuity.
+- Excludes clearly marked references and page markers from narration.
+- Synthesizes speech and combines it into an MP3.
+- Sends both the Markdown script and MP3 through Telegram. The script is sent
+  first; the job's temporary files are cleaned up afterward.
 
-For each `POST /podcasts` request, provide your own `api_key` as multipart form
-data. The service validates the key and holds it only for that request; it does
-not use a server-side LLM key. For Gemini TTS, provide `gemini_api_key` as well,
-unless the selected LLM provider is Gemini, in which case the same key is used.
-Long PDF text is split into bounded sections for script generation; the sections
-are combined into one dialogue script before audio synthesis.
-`GET /providers` lists available providers, each provider's default model, and
-the selectable model IDs. Select one by sending it as `model`, or enter a
-custom model ID. Configure defaults with `GROQ_MODEL`, `OPENAI_MODEL`, and
-`GEMINI_MODEL`; add comma-separated choices with `GROQ_MODELS`, `OPENAI_MODELS`,
-and `GEMINI_MODELS`. Provider API keys do not belong in `.env`.
+## Requirements
 
-## Deploy to Render
+- Python 3.10 or newer (the included Docker image uses Python 3.11).
+- FFmpeg available on `PATH` for local audio generation. The Docker image
+  installs FFmpeg.
+- A provider API key for script generation. Telegram users supply their own
+  key in the device settings page or in the private bot chat.
+- A Gemini API key whenever Gemini TTS is selected; it is always required by
+  Telegram.
 
-Create a Blueprint in Render from this repository and select `render.yaml`.
-It builds the included Dockerfile, which installs FFmpeg for audio generation.
-The service listens on Render's `PORT`, runs a single worker for the in-memory
-Telegram sessions, and uses `/health` for Render's health check.
+## Install and run locally
 
-The `/keep-alive` endpoint returns `{"status":"ok"}` and can be used by an
-external uptime monitor. Render's free web services sleep after 15 minutes
-without inbound traffic and can take about a minute to wake up. To reduce cold
-starts, configure an external monitor to send a `GET` request to
-`https://<your-service>.onrender.com/keep-alive` every 10-14 minutes. This
-generates inbound traffic and uses free instance hours; use a paid always-on
-instance if continuous availability is required.
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+Copy-Item .env.example .env
+```
 
-For the Telegram bot, set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and
-`TELEGRAM_WEBHOOK_URL` in the Render service's environment. Set the webhook URL
-to `https://<your-service>.onrender.com/telegram/webhook`, then register it
-after deployment by putting those same values in your local `.env` file and
-running `python -m podcast_generator.telegram.set_webhook`. Generated files and
-in-memory jobs are temporary: Render's filesystem is ephemeral, and restarts
-or spin-downs clear local files and active Telegram sessions.
+Install FFmpeg if it is not already available. Add provider keys to `.env` only
+for local CLI use; do not commit that file. Telegram and REST API requests use
+the keys supplied by each user rather than a server-side provider key.
 
-## Telegram webhook
+Start the REST API:
 
-Set these values in `.env`:
+```powershell
+uvicorn podcast_generator.api.main:app --host 0.0.0.0 --port 8000
+```
 
-- `TELEGRAM_BOT_TOKEN`: token from BotFather.
-- `TELEGRAM_WEBHOOK_SECRET`: random 1-256 character value using letters,
-  numbers, `_`, or `-`.
-- `TELEGRAM_WEBHOOK_URL`: public HTTPS URL ending in `/telegram/webhook`.
-- `TELEGRAM_MAX_FILE_SIZE`: maximum downloaded upload size in bytes (default
-  `20971520`, 20 MiB).
-- `TELEGRAM_MAX_TEXT_CHARACTERS`: maximum extracted/input text length
-  (default `200000`).
-- `TELEGRAM_MAX_AUDIO_SIZE`: maximum audio delivery size in bytes (default
-  `52428800`, 50 MiB).
-- `TELEGRAM_SESSION_TTL_SECONDS`: idle conversation expiry (default `1800`).
-- `TELEGRAM_JOB_TIMEOUT_SECONDS`: maximum time budget for script and audio
-  generation (default `1800`, 30 minutes).
+- Interactive API documentation: `http://localhost:8000/docs`
+- Health check: `http://localhost:8000/health`
+- Provider/model catalog: `http://localhost:8000/providers`
 
-Start the API, then register or update the webhook:
+The REST API accepts PDF uploads at `POST /podcasts`. Send the script provider,
+its `api_key`, and the PDF as multipart form data. For Gemini TTS, also provide
+`gemini_api_key` unless the selected script provider is Gemini, in which case
+the same key can be used. The response includes job-specific script and audio
+download URLs.
 
-```text
+## Command-line generation
+
+The CLI reads the script-provider key from `.env` (for example
+`GROQ_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`) and writes outputs to
+`output/` by default:
+
+```powershell
+python -m podcast_generator input\source.pdf --provider groq --tts-provider gemini
+```
+
+Use `--help` to see options including custom models, topic guidance, voice IDs,
+output directory, overwrite behavior, and TTS model selection. CLI TTS defaults
+to Edge; use `--tts-provider gemini` to select Gemini TTS. Gemini TTS requires
+a Gemini key in `.env`.
+
+## Telegram bot
+
+The Telegram integration runs as a webhook on the FastAPI application. For
+installation, bot configuration, webhook registration, commands, file limits,
+and a step-by-step usage walkthrough, see the
+[Telegram user and setup guide](docs/TELEGRAM_GUIDE.md).
+
+Quick overview:
+
+1. Configure the Telegram webhook and open the bot in a private chat.
+2. Send `/start`, `/pdf2podcast`, or `/script2podcast`, then upload a PDF or TXT
+   document as requested.
+3. Configure a script provider and key. Google Gemini TTS also needs a Gemini
+   key; when Gemini is the script provider, that key serves both jobs.
+4. The bot sends the generated Markdown script, then the audio.
+
+Telegram sessions, credentials, active jobs, and temporary files are
+process-local. Use one Uvicorn worker. A restart clears active sessions and
+temporary files; the deployment's filesystem may also be ephemeral.
+
+## Configuration
+
+Copy `.env.example` to `.env` for local settings. Telegram requires:
+
+| Variable | Purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather. |
+| `TELEGRAM_WEBHOOK_SECRET` | Secret used to authenticate webhook requests. Use 1-256 letters, digits, `_`, or `-`. |
+| `TELEGRAM_WEBHOOK_URL` | Public HTTPS webhook URL ending in `/telegram/webhook`. |
+| `GEMINI_TTS_MODEL` | Optional Google Gemini TTS model override. |
+| `TELEGRAM_MAX_FILE_SIZE` | Maximum Telegram upload size in bytes; default 20 MiB. |
+| `TELEGRAM_MAX_TEXT_CHARACTERS` | Maximum extracted/input text; default 200,000 characters. |
+| `TELEGRAM_MAX_AUDIO_SIZE` | Maximum audio upload size in bytes; default 50 MiB. |
+| `TELEGRAM_SESSION_TTL_SECONDS` | Idle session expiration; default 1,800 seconds. |
+| `TELEGRAM_JOB_TIMEOUT_SECONDS` | Script and audio job time budget; default 1,800 seconds. |
+
+`GROQ_MODEL`, `OPENAI_MODEL`, and `GEMINI_MODEL` set script-model defaults.
+Comma-separated `*_MODELS` variables add choices to the API and settings page.
+Provider keys should not be committed or placed in shared deployment
+configuration for Telegram jobs.
+
+## Deployment
+
+The repository includes a Render Blueprint (`render.yaml`) and a Dockerfile.
+Create a Render Blueprint from the repository, then set the Telegram
+environment variables in the Render service dashboard. Set
+`TELEGRAM_WEBHOOK_URL` to
+`https://<your-service>.onrender.com/telegram/webhook`.
+
+After deployment, register the webhook with the same token, secret, and URL in
+your local `.env`:
+
+```powershell
 python -m podcast_generator.telegram.set_webhook
 ```
 
-Webhook registration also installs the Telegram bot menu commands:
-`/devicesettings`, `/pdf2podcast`, `/script2podcast`, `/keys`, `/usage`, and
-`/help`. Run the registration command again after updating the deployment to
-refresh the menu. `/start` and `/cancel` remain available as additional
-commands.
+The registration command also refreshes the bot's Telegram command menu. The
+container runs one Uvicorn worker to keep process-local sessions consistent.
+Render's free service may sleep and uses an ephemeral filesystem; active work
+and local delivery statistics do not survive restarts or redeploys.
 
-Transient Telegram HTTPS connection failures are retried up to five times with
-exponential backoff for Bot API calls and file downloads.
+## Security and privacy notes
 
-In a private chat, send `/start` and upload a PDF or TXT file. Quick start uses
-the configured Groq model for script generation and Gemini TTS with the
-configured `GEMINI_TTS_MODEL`. After the file is checked, open the settings
-Web App to use or edit device-local provider keys, model, TTS provider/model,
-and podcast preferences. `/settings` opens the same form at any time.
+- Do not commit `.env` or paste provider keys into public chats.
+- The bot asks users to provide their own LLM key. Telegram key messages are
+  deleted automatically where Telegram permits; if deletion fails, the bot
+  asks the user to delete the message manually.
+- On supported Telegram clients, the settings page stores keys in that
+  device's Telegram SecureStorage. Keys are sent over HTTPS for a job and kept
+  in server process memory only. They are not written to server-side settings.
+- Uploaded files, generated scripts, and audio use temporary job directories
+  in Telegram and are cleaned up after delivery or failure.
 
-For PDF podcasts, `/pdf2podcast` (or PDF from `/start`) first lets the user
-choose a general source-grounded podcast, exam preparation, research-paper
-explanation, job-interview preparation, concept learning, or a custom
-instruction of up to 2,000 characters. The selected guidance is combined with
-the existing source-grounded generation rules. `/script2podcast` keeps the
-TXT-script workflow unchanged.
+## Project layout
 
-The Web App saves settings and API keys in Telegram SecureStorage on supported
-clients (encrypted at rest by the device's secure storage); they are
-device-specific and do not sync across devices. If SecureStorage is unavailable,
-the Web App saves preferences only and does not persist keys. When starting a
-job, the form sends selected credentials over HTTPS to the app. The app
-validates them and keeps them in process memory only for the active job/session;
-it does not persist them. If the Telegram client cannot open the Web App or
-does not support SecureStorage, use **Configure in chat (fallback)** after the
-file is checked. In fallback mode keys are entered in chat, deleted where
-Telegram allows, and retained only in the active in-memory session. Gemini TTS
-requires a Gemini API key; Edge TTS does not.
+```text
+podcast_generator/
+  api/                 FastAPI endpoints
+  services/            PDF/script and speech generation
+  telegram/            Webhook bot, settings page, and Telegram client
+  tools/               LangGraph workflow tools
+  workflows/           Script-then-audio orchestration
+input/                 Local input files and podcast preferences
+output/                Local CLI/API outputs
+tests/                 Unit and integration tests
+docs/                  User documentation and illustrations
+```
 
-Use `/keys` or the links in the device settings page to open the official Groq,
-OpenAI, and Gemini API key pages. The bot cannot create provider keys for you.
-`/help` explains the setup flow, and `/usage` shows the all-user successful
-delivery total plus your personal count. A successful delivery is counted only
-after Telegram accepts the audio upload. Per-user counts and usernames are
-stored in `podcast_generator/telegram/usage.json`; that file is git-ignored.
-On Render's free service, runtime file changes are ephemeral and can be lost
-on restart or redeploy, so this count can reset. Persisting it across restarts
-requires a paid Render persistent disk or an external database.
+## Tests
 
-The webhook queues generation in an in-process background task and returns
-quickly. Sessions, credentials, duplicate-update tracking, and queued tasks are
-held in memory only. Run a single ASGI worker so webhook updates reach the
-same in-memory session store; concurrent user jobs are supported within that
-process. For multi-worker or restart-durable deployments, replace the
-in-memory session/task store with a shared queue and encrypted ephemeral
-credential store. Uploaded inputs, scripts, and MP3s use per-job temporary
-directories and are removed after delivery, cancellation, failure, or session
-expiry.
+Run the test suite from the repository root:
+
+```powershell
+python -m unittest discover -s tests -v
+```

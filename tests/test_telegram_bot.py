@@ -11,6 +11,7 @@ from podcast_generator.telegram.bot import TelegramPodcastBot
 from podcast_generator.telegram.client import TelegramClient
 from podcast_generator.telegram.generation import (
     estimate_generation_seconds,
+    generate_audio_file,
     read_source_text,
     safe_basename,
 )
@@ -73,7 +74,6 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.stage, "choose_mode")
         self.assertEqual(session.provider, "groq")
         self.assertEqual(session.model, provider_models("groq")[0])
-        self.assertEqual(session.tts_provider, "gemini")
         keyboard = self.client.calls[-1][1]["reply_markup"]["inline_keyboard"]
         choices = {
             button["callback_data"]
@@ -237,6 +237,32 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
             provider_models("groq")[1][0],
         )
         self.assertEqual(self.bot.sessions[10].stage, "gemini_key")
+        self.assertIn("required for Google Gemini TTS", self.client.calls[-1][1]["text"])
+        self.assertNotIn("reply_markup", self.client.calls[-1][1])
+
+        await self.bot.process_update(
+            {
+                "update_id": 4,
+                "message": private_message(10, 10, 4, text="/skip"),
+            }
+        )
+        self.assertEqual(self.bot.sessions[10].stage, "gemini_key")
+        self.assertEqual(self.bot.sessions[10].gemini_key, "")
+        self.assertIn("required", self.client.calls[-1][1]["text"])
+
+        with patch(
+            "podcast_generator.telegram.bot.validate_provider_key",
+            return_value=None,
+        ) as validate_gemini:
+            await self.bot.process_update(
+                {
+                    "update_id": 5,
+                    "message": private_message(10, 10, 5, text="valid-gemini-key"),
+                }
+            )
+        validate_gemini.assert_called_once_with("gemini", "valid-gemini-key")
+        self.assertEqual(self.bot.sessions[10].gemini_key, "valid-gemini-key")
+        self.assertEqual(self.bot.sessions[10].stage, "choose_mode")
 
     async def test_gemini_provider_key_continues_to_mode_selection(self):
         callback = {
@@ -408,7 +434,6 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
                 provider="groq",
                 model="test-model",
                 provider_key="test-key",
-                tts_provider="edge",
                 source_path=source_path,
                 original_filename="source.txt",
                 temporary_directory=Path(folder),
@@ -489,13 +514,31 @@ class TelegramValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no readable text"):
                 read_source_text(source)
 
-    def test_generation_estimate_scales_with_text_and_tts_provider(self):
-        short = estimate_generation_seconds(100, "edge")
-        long_edge = estimate_generation_seconds(30_000, "edge")
-        long_gemini = estimate_generation_seconds(30_000, "gemini")
+    def test_generation_estimate_scales_with_text(self):
+        short = estimate_generation_seconds(100)
+        long = estimate_generation_seconds(30_000)
 
-        self.assertGreater(long_edge, short)
-        self.assertGreater(long_edge, long_gemini)
+        self.assertGreater(long, short)
+
+    def test_telegram_audio_generation_always_uses_gemini_tts(self):
+        source = Path("script.md")
+        destination = Path("podcast.mp3")
+        with patch(
+            "podcast_generator.telegram.generation.audio.convert_to_mp3",
+            return_value=destination,
+        ) as convert:
+            result = generate_audio_file(
+                source,
+                destination,
+                "gemini-secret",
+                "Kore",
+                "Puck",
+                tts_model="gemini-test-tts",
+            )
+
+        self.assertEqual(result, destination)
+        self.assertEqual(convert.call_args.kwargs["tts_provider"], "gemini")
+        self.assertEqual(convert.call_args.kwargs["gemini_api_key"], "gemini-secret")
 
     def test_provider_error_message_does_not_echo_exception_content(self):
         sensitive_message = "provider failed with key: do-not-share"

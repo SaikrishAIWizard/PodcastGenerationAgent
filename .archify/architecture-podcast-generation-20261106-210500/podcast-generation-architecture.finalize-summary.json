@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\candidate.json",
+    "sha256": "2747202fe52cdc464855d7b322195fd5af540ddf3e3722edbdadc5b8d5d1b4a6",
+    "bytes": 9968
+  },
+  "artifact": {
+    "path": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\podcast-generation-architecture.html",
+    "sha256": "6a8fca5cb1d168fc8c6386ed4550d0e39ac54c80c4866fed225d664837f44dfa",
+    "bytes": 868523
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\podcast-generation-architecture.finalize.json",
+    "summaryReceipt": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\podcast-generation-architecture.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\podcast-generation-architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-06T15:38:09.809Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 15407,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 3,
+      "routesOverSuggestedBends": 4
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "webhook",
+            "from": "telegram_api",
+            "to": "fastapi",
+            "label": "webhook · secret checked",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "right": {
+            "id": "webhook-dispatch",
+            "from": "fastapi",
+            "to": "telegram_bot",
+            "label": "schedule update task",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            376.00000000000006,
+            276
+          ],
+          "sharedNode": "fastapi"
+        },
+        {
+          "left": {
+            "id": "fastapi-jobs",
+            "from": "fastapi",
+            "to": "process_state",
+            "label": "job ID → file paths",
+            "collectionIndex": 9,
+            "artifactIndex": 10
+          },
+          "right": {
+            "id": "bot-script",
+            "from": "telegram_bot",
+            "to": "script_generation",
+            "label": "direct script helper",
+            "collectionIndex": 14,
+            "artifactIndex": 15
+          },
+          "point": [
+            810,
+            348.00000000000006
+          ]
+        },
+        {
+          "left": {
+            "id": "api-files",
+            "from": "fastapi",
+            "to": "local_files",
+            "label": "stage upload / serve outputs",
+            "collectionIndex": 11,
+            "artifactIndex": 12
+          },
+          "right": {
+            "id": "bot-script",
+            "from": "telegram_bot",
+            "to": "script_generation",
+            "label": "direct script helper",
+            "collectionIndex": 14,
+            "artifactIndex": 15
+          },
+          "point": [
+            965.9999999999999,
+            348
+          ]
+        }
+      ],
+      "detours": [
+        {
+          "relationship": {
+            "id": "chat-user",
+            "from": "telegram_users",
+            "to": "telegram_api",
+            "label": "chat + document",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 3,
+          "stretch": 1.342
+        },
+        {
+          "relationship": {
+            "id": "webhook",
+            "from": "telegram_api",
+            "to": "fastapi",
+            "label": "webhook · secret checked",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "bends": 3,
+          "stretch": 1.094
+        },
+        {
+          "relationship": {
+            "id": "api-files",
+            "from": "fastapi",
+            "to": "local_files",
+            "label": "stage upload / serve outputs",
+            "collectionIndex": 11,
+            "artifactIndex": 12
+          },
+          "bends": 3,
+          "stretch": 1
+        },
+        {
+          "relationship": {
+            "id": "bot-script",
+            "from": "telegram_bot",
+            "to": "script_generation",
+            "label": "direct script helper",
+            "collectionIndex": 14,
+            "artifactIndex": 15
+          },
+          "bends": 4,
+          "stretch": 1
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "telegram_api → fastapi and fastapi → telegram_bot cross next to fastapi: move node telegram_api or telegram_bot so the two reach fastapi from different sides (for example one level with it, one directly above or below it).",
+      "fastapi → process_state crosses telegram_bot → script_generation: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "fastapi → local_files crosses telegram_bot → script_generation: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "telegram_users → telegram_api needs 3 bends: move node telegram_users or telegram_api so they share a row or column with matching centers, or sit diagonally with a clear corner.",
+      "telegram_api → fastapi needs 3 bends: move node telegram_api or fastapi so they share a row or column with matching centers, or sit diagonally with a clear corner.",
+      "fastapi → local_files needs 3 bends: move node fastapi or local_files so they share a row or column with matching centers, or sit diagonally with a clear corner.",
+      "telegram_bot → script_generation needs 4 bends: move node telegram_bot or script_generation so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

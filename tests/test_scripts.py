@@ -1,7 +1,7 @@
 import sys
-import types
 import unittest
 from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from podcast_generator.services import scripts
@@ -31,15 +31,19 @@ class ScriptGenerationTests(unittest.TestCase):
 
             def __call__(self, **kwargs):
                 calls.append(kwargs)
-                return types.SimpleNamespace(dialogue=next(responses))
+                return SimpleNamespace(
+                    dialogue=next(responses),
+                    coverage_notes=f"Covered concept {len(calls)}.",
+                )
 
-        fake_dspy = types.ModuleType("dspy")
-        fake_dspy.Signature = FakeSignature
-        fake_dspy.InputField = lambda: None
-        fake_dspy.OutputField = lambda: None
-        fake_dspy.LM = lambda *_args, **kwargs: kwargs
-        fake_dspy.Predict = FakePredict
-        fake_dspy.context = lambda **_kwargs: nullcontext()
+        fake_dspy = SimpleNamespace(
+            Signature=FakeSignature,
+            InputField=lambda: None,
+            OutputField=lambda: None,
+            LM=lambda *_args, **kwargs: kwargs,
+            Predict=FakePredict,
+            context=lambda **_kwargs: nullcontext(),
+        )
 
         with patch.dict(sys.modules, {"dspy": fake_dspy}):
             result = scripts.generate_script(
@@ -52,6 +56,12 @@ class ScriptGenerationTests(unittest.TestCase):
                 for call in calls)
         )
         self.assertTrue(all("one segment" in call["guidelines"] for call in calls))
+        self.assertIn("opening segment", calls[0]["segment_position"])
+        self.assertIn("middle segment", calls[1]["segment_position"])
+        self.assertIn("final segment", calls[2]["segment_position"])
+        self.assertIn("Covered concept 1.", calls[1]["continuity_context"])
+        self.assertIn("First expert turn.", calls[1]["continuity_context"])
+        self.assertIn("Covered concept 2.", calls[2]["continuity_context"])
         self.assertEqual(
             result.count("HOST:"),
             3,
@@ -70,17 +80,19 @@ class ScriptGenerationTests(unittest.TestCase):
 
             def __call__(self, **kwargs):
                 calls.append(kwargs)
-                return types.SimpleNamespace(
-                    dialogue="HOST: Hello.\nEXPERT: Welcome."
+                return SimpleNamespace(
+                    dialogue="HOST: Hello.\nEXPERT: Welcome.",
+                    coverage_notes="Introduces the main concept.",
                 )
 
-        fake_dspy = types.ModuleType("dspy")
-        fake_dspy.Signature = FakeSignature
-        fake_dspy.InputField = lambda: None
-        fake_dspy.OutputField = lambda: None
-        fake_dspy.LM = lambda *_args, **kwargs: kwargs
-        fake_dspy.Predict = FakePredict
-        fake_dspy.context = lambda **_kwargs: nullcontext()
+        fake_dspy = SimpleNamespace(
+            Signature=FakeSignature,
+            InputField=lambda: None,
+            OutputField=lambda: None,
+            LM=lambda *_args, **kwargs: kwargs,
+            Predict=FakePredict,
+            context=lambda **_kwargs: nullcontext(),
+        )
 
         with patch.dict(sys.modules, {"dspy": fake_dspy}):
             result = scripts.generate_script(
@@ -89,7 +101,25 @@ class ScriptGenerationTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
         self.assertNotIn("one segment", calls[0]["guidelines"])
+        self.assertIn("complete episode", calls[0]["segment_position"])
+        self.assertIn(
+            "No earlier podcast dialogue",
+            calls[0]["continuity_context"],
+        )
         self.assertEqual(result, "HOST: Hello.\nEXPERT: Welcome.\n")
+
+    def test_preparation_removes_page_markers_and_bibliography(self):
+        source_text = (
+            "[Page 1]\n1 Introduction\nThe useful findings are here.\n\n"
+            "[Page 9]\nReferences\nAuthor. A paper title. 2024."
+        )
+
+        prepared = scripts.prepare_source_text(source_text)
+
+        self.assertNotIn("[Page", prepared)
+        self.assertNotIn("References", prepared)
+        self.assertNotIn("A paper title", prepared)
+        self.assertIn("The useful findings are here.", prepared)
 
     def test_language_model_output_limit_is_provider_safe(self):
         self.assertEqual(scripts.MAX_SCRIPT_OUTPUT_TOKENS, 4096)

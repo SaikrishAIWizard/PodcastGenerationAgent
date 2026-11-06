@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ffcbc2aa-3c0f-4929-9f80-d2b0b9e314ed",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\candidate.json",
+  "output": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\ConvertText2Audio\\.archify\\architecture-podcast-generation-20261106-210500\\podcast-generation-architecture.html",
+  "specification": {
+    "sha256": "2747202fe52cdc464855d7b322195fd5af540ddf3e3722edbdadc5b8d5d1b4a6",
+    "bytes": 9968
+  },
+  "artifact": {
+    "sha256": "6a8fca5cb1d168fc8c6386ed4550d0e39ac54c80c4866fed225d664837f44dfa",
+    "bytes": 868523
+  }
+}
