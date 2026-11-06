@@ -11,3 +11,4 @@ dist/
 /podcast_generator/telegram/usage.json
 .agents
 skills-lock.json
+.archify
