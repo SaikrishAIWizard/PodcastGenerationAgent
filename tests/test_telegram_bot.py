@@ -444,10 +444,13 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
                 return work()
 
             def generate_script(_source, path, *_args):
+                self.assertEqual(Path(path).name, "source.md")
                 Path(path).write_text("HOST: Hello", encoding="utf-8")
 
             def generate_audio(_script, path, *_args, **_kwargs):
-                self.assertFalse(_script.exists())
+                self.assertTrue(_script.is_file())
+                self.assertEqual(_script.read_text(encoding="utf-8"), "HOST: Hello")
+                self.assertEqual(Path(path).name, "source.mp3")
                 Path(path).write_bytes(b"mp3")
 
             async def record_after_send(user_id, username):
@@ -482,6 +485,15 @@ class TelegramBotTests(unittest.IsolatedAsyncioTestCase):
                 await self.bot._generate_and_deliver(session, 9999)
 
         record_usage.assert_awaited_once_with(10, "podcast_user")
+        self.assertFalse(source_path.parent.exists())
+        self.assertIn(
+            ("sendDocument", {"chat_id": 10, "filename": "source.md"}),
+            self.client.calls,
+        )
+        self.assertIn(
+            ("sendAudio", {"chat_id": 10, "filename": "source.mp3"}),
+            self.client.calls,
+        )
         self.assertIn(
             session.task_guidance,
             generate_script_mock.call_args.args[5],

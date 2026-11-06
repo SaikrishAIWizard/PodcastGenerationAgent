@@ -1185,7 +1185,9 @@ class TelegramPodcastBot:
     ) -> None:
         temporary_directory = session.temporary_directory
         assert temporary_directory is not None
-        script_path = temporary_directory / "podcast_script.md"
+        script_path = temporary_directory / safe_basename(
+            session.original_filename, ".md"
+        )
         audio_path = temporary_directory / safe_basename(
             session.original_filename, ".mp3"
         )
@@ -1241,7 +1243,6 @@ class TelegramPodcastBot:
                 script_path,
                 script_path.name,
             )
-            script_path.unlink()
             await self.client.call(
                 "sendMessage",
                 chat_id=session.chat_id,

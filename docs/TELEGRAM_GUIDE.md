@@ -173,9 +173,11 @@ Defaults can be changed through environment variables:
 The bot extracts PDF text, creates a source-grounded dialogue, and uses Google
 Gemini TTS to synthesize its two speakers. Long PDFs are split into sections
 with continuity context. The script document is delivered before audio; the
-local script copy is removed after Telegram accepts the document. Job
-temporary files are cleaned up after delivery, failure, cancellation, or
-session expiry.
+script and MP3 use the uploaded file's sanitized name with `.md` and `.mp3`
+extensions (for example, `lecture.pdf` produces `lecture.md` and
+`lecture.mp3`). The local script copy is retained until voice synthesis has
+read it, then job temporary files are cleaned up after delivery, failure,
+cancellation, or session expiry.
 
 ## Troubleshooting
 
